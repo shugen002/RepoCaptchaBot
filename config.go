@@ -15,6 +15,7 @@ type Config struct {
 	FilePath    string
 	FileLine    int
 	Language    string
+	MaxAttempts int
 }
 
 func LoadConfig() (Config, error) {
@@ -37,6 +38,15 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.QuestionTTL == 0 {
 		cfg.QuestionTTL = 120 * time.Second
+	}
+
+	if attemptsStr := os.Getenv("MAX_ATTEMPTS"); attemptsStr != "" {
+		if attempts, err := strconv.Atoi(attemptsStr); err == nil {
+			cfg.MaxAttempts = attempts
+		}
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = 1
 	}
 
 	if lineStr := os.Getenv("FILE_LINE"); lineStr != "" {

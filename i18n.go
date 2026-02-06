@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -41,15 +42,15 @@ func LoadI18n(lang string) (*I18n, error) {
 	return &I18n{lang: lang, messages: messages}, nil
 }
 
-func (i *I18n) T(key string, vars map[string]string) string {
+func (i *I18n) Raw(key string) string {
 	if i == nil {
-		return renderTemplate(key, vars)
+		return key
 	}
 	text, ok := i.messages[key]
 	if !ok || text == "" {
-		text = key
+		return key
 	}
-	return renderTemplate(text, vars)
+	return text
 }
 
 func loadIniFile(path string) (map[string]string, error) {
@@ -66,12 +67,33 @@ func loadIniFile(path string) (map[string]string, error) {
 	return out, nil
 }
 
-func renderTemplate(text string, vars map[string]string) string {
-	if len(vars) == 0 {
-		return text
+func NormalizeLang(lang string) string {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return ""
 	}
-	for k, v := range vars {
-		text = strings.ReplaceAll(text, "{"+k+"}", v)
+	lang = strings.ReplaceAll(lang, "_", "-")
+	low := strings.ToLower(lang)
+	if strings.HasPrefix(low, "zh") {
+		if strings.Contains(low, "tw") || strings.Contains(low, "hk") || strings.Contains(low, "hant") {
+			return "zh-TW"
+		}
+		return "zh-CN"
 	}
-	return text
+	if strings.HasPrefix(low, "en") {
+		return "en"
+	}
+	return lang
+}
+
+func IsLangAvailable(lang string) bool {
+	lang = NormalizeLang(lang)
+	if lang == "" {
+		return false
+	}
+	path := filepath.Join("i18n", lang+".ini")
+	if _, err := os.Stat(path); err == nil {
+		return true
+	}
+	return false
 }
