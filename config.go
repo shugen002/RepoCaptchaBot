@@ -14,6 +14,7 @@ type Config struct {
 	QuestionTTL time.Duration
 	FilePath    string
 	FileLine    int
+	Language    string
 }
 
 func LoadConfig() (Config, error) {
@@ -22,6 +23,7 @@ func LoadConfig() (Config, error) {
 		GithubToken: os.Getenv("GITHUB_TOKEN"),
 		DBPath:      os.Getenv("DB_PATH"),
 		FilePath:    os.Getenv("FILE_PATH"),
+		Language:    os.Getenv("BOT_LANG"),
 	}
 
 	if cfg.DBPath == "" {

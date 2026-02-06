@@ -39,9 +39,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	i18n, err := LoadI18n(cfg.Language)
+	if err != nil {
+		logger.Error("加载多语言配置失败", "error", err)
+		os.Exit(1)
+	}
+
 	ghClient := NewGitHubClient(cfg.GithubToken)
-	verifier := NewVerifier(ghClient)
-	handler := NewBotHandler(cfg, store, verifier)
+	verifier := NewVerifier(ghClient, i18n)
+	handler := NewBotHandler(cfg, store, verifier, i18n)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment

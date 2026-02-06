@@ -18,14 +18,16 @@ type Question struct {
 }
 
 type Verifier struct {
-	gh  *GitHubClient
-	rnd *rand.Rand
+	gh   *GitHubClient
+	rnd  *rand.Rand
+	i18n *I18n
 }
 
-func NewVerifier(gh *GitHubClient) *Verifier {
+func NewVerifier(gh *GitHubClient, i18n *I18n) *Verifier {
 	return &Verifier{
-		gh:  gh,
-		rnd: rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano())+1)),
+		gh:   gh,
+		rnd:  rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), uint64(time.Now().UnixNano())+1)),
+		i18n: i18n,
 	}
 }
 
@@ -69,7 +71,7 @@ func (v *Verifier) questionLatestCommitAuthor(ctx context.Context, cfg ChatConfi
 	}
 	payload, _ := json.Marshal(map[string]string{"type": "latest_commit_author"})
 	return Question{
-		Prompt:  "最近一次提交的作者是谁？",
+		Prompt:  v.i18n.T("question.latest_commit_author", map[string]string{"repo": cfg.Repo}),
 		Answer:  commit.AuthorName,
 		Type:    "latest_commit_author",
 		Payload: string(payload),
@@ -86,7 +88,7 @@ func (v *Verifier) questionRepoLanguage(ctx context.Context, cfg ChatConfig) (Qu
 	}
 	payload, _ := json.Marshal(map[string]string{"type": "repo_language"})
 	return Question{
-		Prompt:  "仓库的主要编程语言是什么？",
+		Prompt:  v.i18n.T("question.repo_language", map[string]string{"repo": cfg.Repo}),
 		Answer:  repo.Language,
 		Type:    "repo_language",
 		Payload: string(payload),
@@ -100,7 +102,7 @@ func (v *Verifier) questionLatestCommitMessage(ctx context.Context, cfg ChatConf
 	}
 	payload, _ := json.Marshal(map[string]string{"type": "latest_commit_message"})
 	return Question{
-		Prompt:  "最后一次提交的提交信息是什么？",
+		Prompt:  v.i18n.T("question.latest_commit_message", map[string]string{"repo": cfg.Repo}),
 		Answer:  commit.Message,
 		Type:    "latest_commit_message",
 		Payload: string(payload),
@@ -120,7 +122,7 @@ func (v *Verifier) questionLatestRelease(ctx context.Context, cfg ChatConfig) (Q
 	}
 	payload, _ := json.Marshal(map[string]string{"type": "latest_release"})
 	return Question{
-		Prompt:  "最后的Release版本号是多少？",
+		Prompt:  v.i18n.T("question.latest_release", map[string]string{"repo": cfg.Repo}),
 		Answer:  release.Tag,
 		Type:    "latest_release",
 		Payload: string(payload),
@@ -137,7 +139,7 @@ func (v *Verifier) questionFileLine(ctx context.Context, cfg ChatConfig) (Questi
 	}
 	payload, _ := json.Marshal(map[string]interface{}{"type": "file_line", "path": cfg.FilePath, "line": cfg.FileLine})
 	return Question{
-		Prompt:  "文件 " + cfg.FilePath + " 的第 " + strconv.Itoa(cfg.FileLine) + " 行内容是什么？",
+		Prompt:  v.i18n.T("question.file_line", map[string]string{"repo": cfg.Repo, "path": cfg.FilePath, "line": strconv.Itoa(cfg.FileLine)}),
 		Answer:  line,
 		Type:    "file_line",
 		Payload: string(payload),

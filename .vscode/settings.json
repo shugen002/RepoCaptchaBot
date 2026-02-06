@@ -1,5 +1,9 @@
 {
   "chat.tools.terminal.autoApprove": {
-    "gofmt": true
+    "gofmt": true,
+    "/^cd /root/RepoCaptchaBot && go mod tidy$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
   }
 }

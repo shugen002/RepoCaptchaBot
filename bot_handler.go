@@ -18,14 +18,15 @@ type BotHandler struct {
 	cfg      Config
 	store    *Store
 	verifier *Verifier
+	i18n     *I18n
 	warnMu   sync.Mutex
 	lastWarn map[int64]time.Time
 	botMu    sync.Mutex
 	botName  string
 }
 
-func NewBotHandler(cfg Config, store *Store, verifier *Verifier) *BotHandler {
-	return &BotHandler{cfg: cfg, store: store, verifier: verifier, lastWarn: make(map[int64]time.Time)}
+func NewBotHandler(cfg Config, store *Store, verifier *Verifier, i18n *I18n) *BotHandler {
+	return &BotHandler{cfg: cfg, store: store, verifier: verifier, i18n: i18n, lastWarn: make(map[int64]time.Time)}
 }
 
 func (h *BotHandler) HandleUpdate(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -94,8 +95,11 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 	}
 	slog.Info("触发入群验证", "trigger", "join_request", "chat_id", chatID, "chat_title", req.Chat.Title, "user_id", req.From.ID, "username", req.From.Username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
 
-	text := "请在 " + h.cfg.QuestionTTL.String() + " 内回答以下问题以完成验证：\n\n" + q.Prompt + "\n\n" +
-		"请直接回复答案。"
+	text := h.i18n.T("verify.prompt", map[string]string{
+		"ttl":      h.cfg.QuestionTTL.String(),
+		"question": q.Prompt,
+		"repo":     chatCfg.Repo,
+	})
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: req.From.ID,
@@ -164,8 +168,11 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 	}
 	slog.Info("触发入群验证", "trigger", "group_join", "chat_id", chatID, "chat_title", upd.Chat.Title, "user_id", userID, "username", username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
 
-	text := "请在 " + h.cfg.QuestionTTL.String() + " 内回答以下问题以完成验证：\n\n" + q.Prompt + "\n\n" +
-		"请直接回复答案。"
+	text := h.i18n.T("verify.prompt", map[string]string{
+		"ttl":      h.cfg.QuestionTTL.String(),
+		"question": q.Prompt,
+		"repo":     chatCfg.Repo,
+	})
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: userID,
 		Text:   text,
@@ -215,7 +222,7 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 	if strings.HasPrefix(msg.Text, "/start") {
 		if expired {
 			slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
-			_ = h.reject(ctx, b, pending, "验证已超时，请重新申请入群")
+			_ = h.reject(ctx, b, pending, h.i18n.T("verify.timeout", nil))
 			return
 		}
 		slog.Info("重新发送验证题目", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
@@ -225,7 +232,7 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 
 	if expired {
 		slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
-		_ = h.reject(ctx, b, pending, "验证已超时，请重新申请入群")
+		_ = h.reject(ctx, b, pending, h.i18n.T("verify.timeout", nil))
 		return
 	}
 
@@ -238,13 +245,13 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 		}
 		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: msg.Chat.ID,
-			Text:   "验证成功，已批准入群。",
+			Text:   h.i18n.T("verify.success", nil),
 		})
 		return
 	}
 
 	slog.Info("验证失败", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt, "provided_answer", provided)
-	_ = h.reject(ctx, b, pending, "答案不正确，已拒绝入群申请。")
+	_ = h.reject(ctx, b, pending, h.i18n.T("verify.wrong_answer", nil))
 }
 
 func (h *BotHandler) handleGroupMessage(ctx context.Context, b *bot.Bot, msg *models.Message) {
@@ -284,15 +291,15 @@ func (h *BotHandler) handleGroupMessage(ctx context.Context, b *bot.Bot, msg *mo
 func (h *BotHandler) commandSetRepo(ctx context.Context, b *bot.Bot, msg *models.Message, repo string) {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, "用法：/setrepo owner/name")
+		h.sendGroupReply(ctx, b, msg.Chat.ID, h.i18n.T("group.setrepo.usage", nil))
 		return
 	}
 	if _, _, err := parseRepo(repo); err != nil {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, "仓库格式不正确，请使用 owner/name")
+		h.sendGroupReply(ctx, b, msg.Chat.ID, h.i18n.T("group.setrepo.invalid", nil))
 		return
 	}
 	if !h.isGroupAdmin(ctx, b, msg.Chat.ID, msg.From.ID) {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, "只有群管理员可以使用此命令。")
+		h.sendGroupReply(ctx, b, msg.Chat.ID, h.i18n.T("group.setrepo.admin_only", nil))
 		return
 	}
 	cfg := ChatConfig{ChatID: msg.Chat.ID, Repo: repo, UpdatedAt: time.Now()}
@@ -305,18 +312,18 @@ func (h *BotHandler) commandSetRepo(ctx context.Context, b *bot.Bot, msg *models
 		cfg.FileLine = h.cfg.FileLine
 	} else if err != nil {
 		slog.Error("读取群配置失败", "error", err, "chat_id", msg.Chat.ID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, "保存失败，请稍后重试。")
+		h.sendGroupReply(ctx, b, msg.Chat.ID, h.i18n.T("group.save_failed", nil))
 		return
 	}
 	if err := h.store.UpsertChatConfig(ctx, cfg); err != nil {
 		slog.Error("写入群配置失败", "error", err, "chat_id", msg.Chat.ID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, "保存失败，请稍后重试。")
+		h.sendGroupReply(ctx, b, msg.Chat.ID, h.i18n.T("group.save_failed", nil))
 		return
 	}
 	h.clearWarn(msg.Chat.ID)
 	actor := "admin:" + strconv.FormatInt(msg.From.ID, 10)
 	_ = h.store.InsertAudit(ctx, "set_repo", actor, repo)
-	h.sendGroupReply(ctx, b, msg.Chat.ID, "仓库已更新为 "+repo)
+	h.sendGroupReply(ctx, b, msg.Chat.ID, h.i18n.T("group.setrepo.success", map[string]string{"repo": repo}))
 }
 
 func (h *BotHandler) isGroupAdmin(ctx context.Context, b *bot.Bot, chatID, userID int64) bool {
@@ -397,7 +404,11 @@ func (h *BotHandler) sendQuestionAgain(ctx context.Context, b *bot.Bot, chatID i
 	}
 	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "请在 " + h.cfg.QuestionTTL.String() + " 内回答以下问题：\n\n" + question.Prompt,
+		Text: h.i18n.T("verify.prompt_again", map[string]string{
+			"ttl":      h.cfg.QuestionTTL.String(),
+			"question": question.Prompt,
+			"repo":     question.Repo,
+		}),
 	})
 }
 
@@ -405,7 +416,7 @@ func (h *BotHandler) onBotAddedToChat(ctx context.Context, b *bot.Bot, upd *mode
 	chatID := upd.Chat.ID
 	missing := missingPermissions(upd.NewChatMember)
 	if len(missing) > 0 {
-		msg := "机器人需要以下管理员权限才能正常工作：" + strings.Join(missing, "、")
+		msg := h.i18n.T("group.permissions_missing", map[string]string{"missing": strings.Join(missing, "、")})
 		h.sendGroupReply(ctx, b, chatID, msg)
 		slog.Warn("机器人权限不足", "chat_id", chatID, "missing", strings.Join(missing, ","))
 	} else {
@@ -419,7 +430,7 @@ func (h *BotHandler) onBotAddedToChat(ctx context.Context, b *bot.Bot, upd *mode
 		}
 	} else if chatInfo != nil {
 		if !chatRequiresJoinApproval(chatInfo) {
-			h.sendGroupReply(ctx, b, chatID, "尚未开启加入申请，请在群设置中启用“需要管理员批准”以触发验证流程。")
+			h.sendGroupReply(ctx, b, chatID, h.i18n.T("group.join_request_required", nil))
 			slog.Warn("群未开启加入审核", "chat_id", chatID)
 		} else {
 			slog.Info("群已开启加入审核", "chat_id", chatID)
@@ -507,7 +518,7 @@ func (h *BotHandler) notifyMissingConfig(ctx context.Context, b *bot.Bot, chatID
 	h.lastWarn[chatID] = time.Now()
 	h.warnMu.Unlock()
 
-	text := "尚未配置仓库，请群管理员发送 /setrepo owner/name 来设置。"
+	text := h.i18n.T("group.config_missing", nil)
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text}); err != nil {
 		slog.Warn("发送配置提醒失败", "error", err, "chat_id", chatID)
 	}
