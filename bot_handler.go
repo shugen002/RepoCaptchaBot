@@ -32,6 +32,10 @@ func (h *BotHandler) HandleUpdate(ctx context.Context, b *bot.Bot, update *model
 	if update == nil {
 		return
 	}
+	if update.MyChatMember != nil {
+		h.handleMyChatMember(ctx, b, update.MyChatMember)
+		return
+	}
 	if update.ChatJoinRequest != nil {
 		h.handleJoinRequest(ctx, b, update.ChatJoinRequest)
 		return
@@ -88,6 +92,7 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 		slog.Error("保存待验证用户失败", "error", err)
 		return
 	}
+	slog.Info("触发入群验证", "trigger", "join_request", "chat_id", chatID, "chat_title", req.Chat.Title, "user_id", req.From.ID, "username", req.From.Username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
 
 	text := "请在 " + h.cfg.QuestionTTL.String() + " 内回答以下问题以完成验证：\n\n" + q.Prompt + "\n\n" +
 		"请直接回复答案。"
@@ -117,6 +122,10 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 	userID, ok := extractUserID(upd.NewChatMember)
 	if !ok {
 		return
+	}
+	username := ""
+	if user := chatMemberUser(upd.NewChatMember); user != nil {
+		username = user.Username
 	}
 
 	chatCfg, hasCfg := h.ensureChatConfig(ctx, b, chatID)
@@ -153,6 +162,7 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 		slog.Error("保存待验证用户失败", "error", err)
 		return
 	}
+	slog.Info("触发入群验证", "trigger", "group_join", "chat_id", chatID, "chat_title", upd.Chat.Title, "user_id", userID, "username", username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
 
 	text := "请在 " + h.cfg.QuestionTTL.String() + " 内回答以下问题以完成验证：\n\n" + q.Prompt + "\n\n" +
 		"请直接回复答案。"
@@ -194,27 +204,35 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 		return
 	}
 
+	question, err := h.store.GetQuestion(ctx, pending.QuestionID)
+	if err != nil {
+		slog.Error("读取题目失败", "error", err, "question_id", pending.QuestionID)
+		return
+	}
+	expired := time.Now().After(pending.ExpiresAt)
+	username := msg.From.Username
+
 	if strings.HasPrefix(msg.Text, "/start") {
-		if time.Now().After(pending.ExpiresAt) {
+		if expired {
+			slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
 			_ = h.reject(ctx, b, pending, "验证已超时，请重新申请入群")
 			return
 		}
+		slog.Info("重新发送验证题目", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
 		h.sendQuestionAgain(ctx, b, msg.Chat.ID, pending.QuestionID)
 		return
 	}
 
-	if time.Now().After(pending.ExpiresAt) {
+	if expired {
+		slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
 		_ = h.reject(ctx, b, pending, "验证已超时，请重新申请入群")
 		return
 	}
 
-	question, err := h.store.GetQuestion(ctx, pending.QuestionID)
-	if err != nil {
-		slog.Error("读取题目失败", "error", err)
-		return
-	}
+	provided := strings.TrimSpace(msg.Text)
 
 	if normalizeAnswer(msg.Text) == normalizeAnswer(question.Answer) {
+		slog.Info("验证通过", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
 		if err := h.approve(ctx, b, pending); err != nil {
 			slog.Warn("审批失败", "error", err)
 		}
@@ -225,6 +243,7 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 		return
 	}
 
+	slog.Info("验证失败", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt, "provided_answer", provided)
 	_ = h.reject(ctx, b, pending, "答案不正确，已拒绝入群申请。")
 }
 
@@ -355,6 +374,22 @@ func (h *BotHandler) clearWarn(chatID int64) {
 	h.warnMu.Unlock()
 }
 
+func (h *BotHandler) handleMyChatMember(ctx context.Context, b *bot.Bot, upd *models.ChatMemberUpdated) {
+	if upd == nil || upd.Chat.ID == 0 {
+		return
+	}
+	chatID := upd.Chat.ID
+	newType := upd.NewChatMember.Type
+	switch newType {
+	case models.ChatMemberTypeMember, models.ChatMemberTypeAdministrator:
+		slog.Info("机器人加入群聊", "chat_id", chatID, "chat_title", upd.Chat.Title, "status", newType)
+		h.onBotAddedToChat(ctx, b, upd)
+	case models.ChatMemberTypeLeft, models.ChatMemberTypeBanned:
+		slog.Info("机器人离开群聊", "chat_id", chatID, "chat_title", upd.Chat.Title, "status", newType)
+		h.onBotRemovedFromChat(ctx, chatID)
+	}
+}
+
 func (h *BotHandler) sendQuestionAgain(ctx context.Context, b *bot.Bot, chatID int64, questionID int64) {
 	question, err := h.store.GetQuestion(ctx, questionID)
 	if err != nil {
@@ -364,6 +399,52 @@ func (h *BotHandler) sendQuestionAgain(ctx context.Context, b *bot.Bot, chatID i
 		ChatID: chatID,
 		Text:   "请在 " + h.cfg.QuestionTTL.String() + " 内回答以下问题：\n\n" + question.Prompt,
 	})
+}
+
+func (h *BotHandler) onBotAddedToChat(ctx context.Context, b *bot.Bot, upd *models.ChatMemberUpdated) {
+	chatID := upd.Chat.ID
+	missing := missingPermissions(upd.NewChatMember)
+	if len(missing) > 0 {
+		msg := "机器人需要以下管理员权限才能正常工作：" + strings.Join(missing, "、")
+		h.sendGroupReply(ctx, b, chatID, msg)
+		slog.Warn("机器人权限不足", "chat_id", chatID, "missing", strings.Join(missing, ","))
+	} else {
+		slog.Info("机器人权限检查通过", "chat_id", chatID)
+	}
+
+	chatInfo, err := b.GetChat(ctx, &bot.GetChatParams{ChatID: chatID})
+	if err != nil {
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			slog.Warn("获取群信息失败", "error", err, "chat_id", chatID)
+		}
+	} else if chatInfo != nil {
+		if !chatRequiresJoinApproval(chatInfo) {
+			h.sendGroupReply(ctx, b, chatID, "尚未开启加入申请，请在群设置中启用“需要管理员批准”以触发验证流程。")
+			slog.Warn("群未开启加入审核", "chat_id", chatID)
+		} else {
+			slog.Info("群已开启加入审核", "chat_id", chatID)
+		}
+	}
+
+	if _, err := h.store.GetChatConfig(ctx, chatID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			h.notifyMissingConfig(ctx, b, chatID)
+		} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			slog.Error("读取群配置失败", "error", err, "chat_id", chatID)
+		}
+	}
+}
+
+func (h *BotHandler) onBotRemovedFromChat(ctx context.Context, chatID int64) {
+	if chatID == 0 {
+		return
+	}
+	if err := h.store.DeleteChatData(ctx, chatID); err != nil {
+		slog.Error("清除群配置失败", "error", err, "chat_id", chatID)
+		return
+	}
+	h.clearWarn(chatID)
+	slog.Info("已清除群配置", "chat_id", chatID)
 }
 
 func (h *BotHandler) approve(ctx context.Context, b *bot.Bot, pending PendingMember) error {
@@ -450,6 +531,48 @@ func extractUserID(member models.ChatMember) (int64, bool) {
 		return member.Restricted.User.ID, true
 	}
 	return 0, false
+}
+
+func chatMemberUser(member models.ChatMember) *models.User {
+	switch member.Type {
+	case models.ChatMemberTypeMember:
+		if member.Member != nil {
+			return member.Member.User
+		}
+	case models.ChatMemberTypeRestricted:
+		if member.Restricted != nil {
+			return member.Restricted.User
+		}
+	}
+	return nil
+}
+
+func missingPermissions(member models.ChatMember) []string {
+	if member.Type != models.ChatMemberTypeAdministrator || member.Administrator == nil {
+		return []string{"管理员权限（请将机器人设为管理员）", "邀请新成员", "封禁成员"}
+	}
+	admin := member.Administrator
+	missing := make([]string, 0, 2)
+	if !admin.CanInviteUsers {
+		missing = append(missing, "邀请新成员")
+	}
+	if !admin.CanRestrictMembers {
+		missing = append(missing, "封禁成员")
+	}
+	return missing
+}
+
+func chatRequiresJoinApproval(chat *models.ChatFullInfo) bool {
+	if chat == nil {
+		return false
+	}
+	if chat.JoinToSendMessages {
+		return true
+	}
+	if chat.JoinByRequest {
+		return true
+	}
+	return false
 }
 
 func normalizeAnswer(text string) string {

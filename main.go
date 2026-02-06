@@ -59,6 +59,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	if me, err := b.GetMe(ctx); err != nil {
+		logger.Warn("获取机器人信息失败", "error", err)
+	} else {
+		logger.Info("机器人已登录", "username", me.Username, "id", me.ID, "name", me.FirstName)
+	}
 
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)

@@ -198,3 +198,22 @@ func (s *Store) GetChatConfig(ctx context.Context, chatID int64) (ChatConfig, er
 	cfg.UpdatedAt = time.Unix(updated, 0)
 	return cfg, nil
 }
+
+func (s *Store) DeleteChatData(ctx context.Context, chatID int64) error {
+	if chatID == 0 {
+		return errors.New("chat_id 不能为空")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_members WHERE chat_id = ?`, chatID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_configs WHERE chat_id = ?`, chatID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}

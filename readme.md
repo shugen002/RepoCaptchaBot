@@ -1,120 +1,93 @@
-Repo Captcha Bot
-================
+RepoCaptchaBot
+==============
 
-一个简单的基于仓库内容进行验证的Telegram机器人。
+基于 GitHub 仓库内容的人机验证机器人，帮助 Telegram 群管理者拒绝批量脚本号。机器人会给每一位正在申请入群的用户发送一题“仓库知识问答”，只有在时限内答对的人才能获批。
 
-他可以帮助你在Telegram群组中防止机器人和垃圾信息，通过要求新成员解决基于GitHub仓库内容的验证码来验证他们的身份。
+## 关键能力
 
-本项目使用 Golang 编写，并利用 GitHub API 获取仓库信息，数据使用sqlite存储。
+- 自动监听 `ChatJoinRequest` 和回退的 `ChatMemberUpdated` 事件，确保即便群未开启“加入申请”也能触发验证。
+- 结合 GitHub API 与本地缓存生成验证码，当前实现了 5 类问题：最近提交作者 / 最近提交信息 / 仓库主语言 / 最新 Release 版本 / 指定文件的第 N 行。
+- 题目、答案和待验证成员状态持久化在 SQLite，宕机重启后可继续流程，并附带审计日志。
+- 支持按群配置仓库，管理员在群里执行 `/setrepo owner/name` 即可生效，也会继承默认的文件题配置。
+- 内置 1 分钟一次的过期清理，自动丢弃失效验证并写入审计。日志统一使用 `log/slog` 的 JSON 输出，方便采集。
 
-### 验证问题的示例
-
-- 最近一次提交的作者是谁？
-- 仓库的主要编程语言是什么？
-- 最后一次提交的提交信息是什么？  
-- 最后的Release版本号是多少？
-- 某文件的第10行内容是什么？
-
-### 功能特点
-
-1. **基于仓库内容的验证码**：每次新成员加入时，机器人会从指定的GitHub仓库中提取信息，生成独特的验证码问题。
-2. **自动验证**：新成员必须正确回答验证码问题才能获得群组访问权限。
-3. **多种问题类型**：支持多种类型的问题，确保验证码的多样性和安全性。
-4. **易于配置**：群组管理员可在群内通过 `/setrepo owner/name` 命令实时配置目标仓库。
-5. **开源和可定制**：代码开源，允许用户根据自己的需求进行修改和扩展。
-
-### 系统设计
-
-#### 架构概览
+## 架构概览
 
 ```
-┌────────────┐      ┌──────────────┐      ┌──────────────┐
-│Telegram API│◄────►│Bot Service  │◄────►│GitHub Client │
-└────────────┘      └─────┬────────┘      └──────┬───────┘
-                           │                      │
-                           ▼                      │
-                      ┌────────┐                  │
-                      │Verifier│                  │
-                      └────┬───┘                  │
-                           ▼                      │
-                     ┌──────────┐                 │
-                     │SQLite DB │◄────────────────┘
-                     └──────────┘
+Telegram ⇄ BotHandler ⇄ Verifier ⇄ GitHubClient
+                        │
+                        └── Store (SQLite)
 ```
 
-- **Bot Service**：封装 Telegram Bot API 交互，负责监听 `ChatJoinRequest` 事件。
-- **Verifier**：生成验证码问题、验证回答、处理超时逻辑，是业务的核心状态机。
-- **GitHub Client**：调用 GitHub API，缓存必要的仓库元信息，确保问题来源多样且可配置。
-- **SQLite 存储层**：记录待验证成员、已生成的问题、回答状态和审计日志，保证流程可追踪。
+- `main.go` 负责加载配置、初始化 SQLite（`modernc.org/sqlite` 驱动）、创建 Telegram bot 并启动循环。
+- `BotHandler` 统一处理 Telegram 更新、生成题目、在私聊中校验答案并调用 `ApproveChatJoinRequest`/`DeclineChatJoinRequest`。
+- `Verifier` 组合多个问题生成器，挑选第一个可用的题目并返回。
+- `GitHubClient` 自带 5 分钟内存缓存，减少对公开 API 的重复请求，必要时可以携带 Personal Access Token。
+- `Store` 定义数据表结构及 CRUD，涵盖题目、待验证成员、群配置和审计日志。
 
-#### 关键流程
+## 快速开始
 
-1. **入群申请**：Bot 监听 `ChatJoinRequest`（若群未启用申请则回退到 `ChatMemberUpdated`），写入 `pending_members`，并立即与申请者建立私聊会话。
-2. **生成问题**：Verifier 基于配置的仓库从缓存/实时 API 中取数据，按照策略选择题型并落库。
-3. **发送验证码**：Bot 会尝试在私聊中发送问题，要求用户在120秒内回答；若私聊失败则放弃。
-4. **收集回答**：在私聊中监听用户回答，匹配落库问题并验证正确性。
-5. **授予权限**：回答正确则调用 `approveChatJoinRequest` ，失败/超时则拒绝申请，可选地重新发送问题。
-6. **审计与清理**：定期任务回收过期问题、统计通过率并推送给管理员。
+1. 创建 Telegram Bot Token，邀请机器人进群并授予管理员，确保拥有“邀请成员”和“封禁成员”权限。
+2. 在群设置中开启“需要管理员批准”或“加入申请”，否则无法收到 `ChatJoinRequest`。
+3. 准备环境变量（最少 `BOT_TOKEN`），然后执行：
 
-> 注意：Telegram 仅允许已与机器人对话的用户接收私聊消息。Bot 在捕获 `ChatJoinRequest` 时应先 `sendMessage` 提示用户点击 “Start” 再发送正式题目。
+```bash
+go run ./...
+```
 
-#### 数据模型（建议）
+4. 机器人启动后，在目标群发送 `/setrepo owner/name`（只有管理员可用）。命令成功后，新成员即会收到基于该仓库生成的题目。
 
-| 表名 | 关键字段 | 说明 |
+SQLite 数据文件默认写在 `./repo_captcha_bot.db`，可通过 `DB_PATH` 指定绝对路径。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `pending_members` | `telegram_id`, `chat_id`, `question_id`, `expires_at` | 待验证成员状态 |
-| `questions` | `id`, `repo`, `type`, `payload`, `answer` | 生成的验证码题与答案 |
-| `audit_logs` | `id`, `action`, `actor`, `detail`, `created_at` | 管理员操作和系统事件 |
+| `BOT_TOKEN` | (无) | Telegram Bot Token，必填 |
+| `GITHUB_TOKEN` | (空) | 可选，减少 GitHub API 限速 |
+| `DB_PATH` | `./repo_captcha_bot.db` | SQLite 文件路径 |
+| `QUESTION_TTL` | `120s` | 单次验证时限，`time.ParseDuration` 语法 |
+| `FILE_PATH` | (空) | 默认文件题的文件路径，未配置群时作为初始值 |
+| `FILE_LINE` | `0` | 默认文件题的行号，>0 时才会尝试生成该题型 |
 
-#### 配置与扩展点
+## 群组使用流程
 
-- **环境变量**：`BOT_TOKEN`, `GITHUB_TOKEN`, `DB_PATH` 等。
-- **题型插件化**：按接口 `QuestionProvider` 注册新题型，方便扩展如 CI 状态、Issue 统计等问题。
-- **缓存策略**：使用内存缓存或 Redis（可选）降低 GitHub API 调用频率，失效策略可设为 $5\text{min}$ 或基于 `ETag`。
-- **安全策略**：
-  - 限制单用户回答频率，防止暴力破解。
-  - 使用 Telegram `restrictChatMember` 降低可见性，避免问题泄露。
-  - 对日志与配置进行脱敏，避免泄漏 token。
+1. 管理员把机器人拉入群并升为管理员；机器人会自检权限和群设置，缺少权限时会提示。
+2. 第一次运行时若未配置仓库，机器人会每 5 分钟提醒一次执行 `/setrepo owner/name`。
+3. 有用户申请入群时：
+   - `BotHandler` 从 `Store` 读取群配置并调用 `Verifier` 生成题目。
+   - 题目（`questions` 表）与待验证信息（`pending_members` 表）会立即落库。
+   - 机器人给用户发送私聊题目，要求在 `QUESTION_TTL` 内回答，用户也可使用 `/start` 再次获取题目。
+4. 回答正确则批准申请，错误或超时则拒绝并可选踢出；结论会写入 `audit_logs`。
 
-#### 运行与观察性
+## 题目类型
 
-- **指标**：成功率、踢出率、平均响应时间、GitHub API 调用次数。
-- **日志**：结构化输出 JSON，字段包括 `chat_id`, `member_id`, `question_type`, `result` 等，便于接入 Loki/ELK。
-- **告警**：当 Github API 降级、回答正确率异常、数据库不可用时发送管理员通知。
+| 类型 | Prompt | 数据来源 |
+| --- | --- | --- |
+| `latest_commit_author` | 最近一次提交的作者是谁？ | `GET /repos/{repo}/commits?per_page=1` |
+| `latest_commit_message` | 最后一次提交的提交信息是什么？ | 同上 |
+| `repo_language` | 仓库的主要编程语言是什么？ | `GET /repos/{repo}` |
+| `latest_release` | 最后的 Release 版本号是多少？ | `GET /repos/{repo}/releases/latest`（若不存在则跳过） |
+| `file_line` | 文件 `<path>` 的第 `<line>` 行内容是什么？ | `GET /repos/{repo}/contents/{path}` 并解码 Base64 |
 
-### 部署
+所有题目在入库时会记录 `prompt`, `payload`, `answer`，方便后续审计与重发。
 
-### 配置
+## 数据存储
 
-环境变量示例：
+`Store.Init()` 会创建以下表：
 
-- `BOT_TOKEN`：Telegram Bot Token（必填）
-- `DB_PATH`：SQLite 数据库路径（可选，默认 `./repo_captcha_bot.db`）
-- `GITHUB_TOKEN`：GitHub Token（可选，避免 API 限速）
-- `QUESTION_TTL`：答题超时时间（可选，默认 120s，如 `2m`）
-- `FILE_PATH`：用于“文件第 N 行”题型的文件路径（可选，作为新建群配置的默认值）
-- `FILE_LINE`：用于“文件第 N 行”题型的行号（可选，作为新建群配置的默认值）
+- `questions`：记录生成过的题目及答案。
+- `pending_members`：以 `(telegram_id, chat_id)` 为主键保存当前待验证用户，含过期时间。
+- `chat_configs`：群配置（仓库、文件路径/行号）。
+- `audit_logs`：所有自动化动作（发送失败、通过、拒绝、管理员命令）。
 
-#### 群组内配置
+后台协程每分钟调用 `CleanupExpired`，删除 `pending_members` 中已过期的记录，防止堆积。
 
-机器人启动后需要在目标群组中执行一次 `/setrepo owner/name` 命令（仅管理员可用），仓库信息会写入数据库并立即生效。每个群可以配置不同的仓库，若后续需要修改可重复执行该命令。
+## 开发提示
 
-#### Docker Compose 
-```yaml
-version: '3.8'
-services:
-  repo-captcha-bot:
-    image: shugen002/repo-captcha-bot:latest
-    container_name: repo-captcha-bot
-    restart: unless-stopped
-    environment:
-      - BOT_TOKEN=your_telegram_bot_token
-      - DB_PATH=/data/repo_captcha_bot.db
-      - GITHUB_TOKEN=your_github_token # 可选，但推荐使用以避免API速率限制
-    volumes:
-      - ./data:/data
-```
+- 依赖声明在 `go.mod`，当前要求 Go `1.25.7` 或更高。
+- 运行 `go run ./...` 即可本地启动；如需交叉编译可直接 `go build ./...`。
+- 若部署在受限网络，可通过 `HTTP_PROXY`/`HTTPS_PROXY` 等环境变量让机器人复用宿主代理；`main.go` 已继承 `http.ProxyFromEnvironment`。
+- 建议为机器人和 GitHub Token 使用独立的 `.env`/secret 管理，避免写死在代码中。
 
-### 感谢
-
-感谢 Golang 社区和所有开源贡献者，使得这个项目成为可能！
+欢迎基于 `Verifier` 新增题型或扩展更多存储后端，提交 PR 之前可自查日志确保每个分支都覆盖到。
