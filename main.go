@@ -11,6 +11,11 @@ import (
 
 	"github.com/go-telegram/bot"
 	_ "modernc.org/sqlite"
+
+	"github.com/shugen002/RepoCaptchaBot/models"
+	"github.com/shugen002/RepoCaptchaBot/utils"
+	githubapi "github.com/shugen002/RepoCaptchaBot/utils/github"
+	"github.com/shugen002/RepoCaptchaBot/verifier"
 )
 
 func main() {
@@ -33,20 +38,20 @@ func main() {
 	}
 	defer db.Close()
 
-	store := NewStore(db)
+	store := models.NewStore(db)
 	if err := store.Init(ctx); err != nil {
 		logger.Error("初始化数据库失败", "error", err)
 		os.Exit(1)
 	}
 
-	i18n, err := LoadI18n(cfg.Language)
+	i18n, err := utils.LoadI18n(cfg.Language)
 	if err != nil {
 		logger.Error("加载多语言配置失败", "error", err)
 		os.Exit(1)
 	}
 
-	ghClient := NewGitHubClient(cfg.GithubToken)
-	verifier := NewVerifier(ghClient, store)
+	ghClient := githubapi.NewGitHubClient(cfg.GithubToken)
+	verifier := verifier.NewVerifier(ghClient, store)
 	handler := NewBotHandler(cfg, store, verifier, i18n)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()

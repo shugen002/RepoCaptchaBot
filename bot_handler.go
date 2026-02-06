@@ -12,13 +12,18 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+
+	"github.com/shugen002/RepoCaptchaBot/commands"
+	appmodels "github.com/shugen002/RepoCaptchaBot/models"
+	"github.com/shugen002/RepoCaptchaBot/utils"
+	"github.com/shugen002/RepoCaptchaBot/verifier"
 )
 
 type BotHandler struct {
 	cfg      Config
-	store    *Store
-	verifier *Verifier
-	i18n     *I18n
+	store    *appmodels.Store
+	verifier *verifier.Verifier
+	i18n     *utils.I18n
 	warnMu   sync.Mutex
 	lastWarn map[int64]time.Time
 	botMu    sync.Mutex
@@ -26,10 +31,10 @@ type BotHandler struct {
 	connMu   sync.RWMutex
 	connMap  map[int64]int64
 	i18nMu   sync.RWMutex
-	i18nMap  map[string]*I18n
+	i18nMap  map[string]*utils.I18n
 }
 
-func NewBotHandler(cfg Config, store *Store, verifier *Verifier, i18n *I18n) *BotHandler {
+func NewBotHandler(cfg Config, store *appmodels.Store, verifier *verifier.Verifier, i18n *utils.I18n) *BotHandler {
 	return &BotHandler{
 		cfg:      cfg,
 		store:    store,
@@ -37,7 +42,7 @@ func NewBotHandler(cfg Config, store *Store, verifier *Verifier, i18n *I18n) *Bo
 		i18n:     i18n,
 		lastWarn: make(map[int64]time.Time),
 		connMap:  make(map[int64]int64),
-		i18nMap:  make(map[string]*I18n),
+		i18nMap:  make(map[string]*utils.I18n),
 	}
 }
 
@@ -84,7 +89,7 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 		return
 	}
 
-	qid, err := h.store.InsertQuestion(ctx, StoredQuestion{
+	qid, err := h.store.InsertQuestion(ctx, appmodels.StoredQuestion{
 		Repo:      chatCfg.Repo,
 		Type:      q.Type,
 		Prompt:    q.Prompt,
@@ -98,7 +103,7 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 	}
 
 	expiresAt := time.Now().Add(chatCfg.QuestionTTL)
-	if err := h.store.UpsertPending(ctx, PendingMember{
+	if err := h.store.UpsertPending(ctx, appmodels.PendingMember{
 		TelegramID:   req.From.ID,
 		ChatID:       req.Chat.ID,
 		QuestionID:   qid,
@@ -110,10 +115,10 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 	}
 	slog.Info("触发入群验证", "trigger", "join_request", "chat_id", chatID, "chat_title", req.Chat.Title, "user_id", req.From.ID, "username", req.From.Username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
 
-	text := formatMarkdown(userI18n, "verify.prompt", map[string]string{
-		"ttl":      formatCode(formatDuration(chatCfg.QuestionTTL)),
+	text := utils.FormatMarkdown(userI18n, "verify.prompt", map[string]string{
+		"ttl":      utils.FormatCode(utils.FormatDuration(chatCfg.QuestionTTL)),
 		"question": q.Prompt,
-		"repo":     formatRepoLink(chatCfg.Repo),
+		"repo":     utils.FormatRepoLink(chatCfg.Repo),
 	})
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
@@ -161,7 +166,7 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 		return
 	}
 
-	qid, err := h.store.InsertQuestion(ctx, StoredQuestion{
+	qid, err := h.store.InsertQuestion(ctx, appmodels.StoredQuestion{
 		Repo:      chatCfg.Repo,
 		Type:      q.Type,
 		Prompt:    q.Prompt,
@@ -175,7 +180,7 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 	}
 
 	expiresAt := time.Now().Add(chatCfg.QuestionTTL)
-	if err := h.store.UpsertPending(ctx, PendingMember{
+	if err := h.store.UpsertPending(ctx, appmodels.PendingMember{
 		TelegramID:   userID,
 		ChatID:       upd.Chat.ID,
 		QuestionID:   qid,
@@ -187,10 +192,10 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 	}
 	slog.Info("触发入群验证", "trigger", "group_join", "chat_id", chatID, "chat_title", upd.Chat.Title, "user_id", userID, "username", username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
 
-	text := formatMarkdown(userI18n, "verify.prompt", map[string]string{
-		"ttl":      formatCode(formatDuration(chatCfg.QuestionTTL)),
+	text := utils.FormatMarkdown(userI18n, "verify.prompt", map[string]string{
+		"ttl":      utils.FormatCode(utils.FormatDuration(chatCfg.QuestionTTL)),
 		"question": q.Prompt,
-		"repo":     formatRepoLink(chatCfg.Repo),
+		"repo":     utils.FormatRepoLink(chatCfg.Repo),
 	})
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    userID,
@@ -245,7 +250,7 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 	if cfgErr == nil {
 		chatCfg = h.applyChatDefaults(chatCfg)
 	} else {
-		chatCfg = h.applyChatDefaults(ChatConfig{ChatID: pending.ChatID, Repo: question.Repo})
+		chatCfg = h.applyChatDefaults(appmodels.ChatConfig{ChatID: pending.ChatID, Repo: question.Repo})
 	}
 	userI18n := h.i18nForUser(msg.From, chatCfg)
 	expired := time.Now().After(pending.ExpiresAt)
@@ -254,7 +259,7 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 	if strings.HasPrefix(msg.Text, "/start") {
 		if expired {
 			slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
-			_ = h.reject(ctx, b, pending, formatMarkdown(userI18n, "verify.timeout", nil))
+			_ = h.reject(ctx, b, pending, utils.FormatMarkdown(userI18n, "verify.timeout", nil))
 			return
 		}
 		slog.Info("重新发送验证题目", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
@@ -268,20 +273,20 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 
 	if expired {
 		slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
-		_ = h.reject(ctx, b, pending, formatMarkdown(userI18n, "verify.timeout", nil))
+		_ = h.reject(ctx, b, pending, utils.FormatMarkdown(userI18n, "verify.timeout", nil))
 		return
 	}
 
 	provided := strings.TrimSpace(msg.Text)
 
-	if normalizeAnswer(msg.Text) == normalizeAnswer(question.Answer) {
+	if utils.NormalizeAnswer(msg.Text) == utils.NormalizeAnswer(question.Answer) {
 		slog.Info("验证通过", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
 		if err := h.approve(ctx, b, pending); err != nil {
 			slog.Warn("审批失败", "error", err)
 		}
 		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:    msg.Chat.ID,
-			Text:      formatMarkdown(userI18n, "verify.success", nil),
+			Text:      utils.FormatMarkdown(userI18n, "verify.success", nil),
 			ParseMode: "MarkdownV2",
 		})
 		return
@@ -293,13 +298,13 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 	attemptsLeft := pending.AttemptsLeft - 1
 	if attemptsLeft <= 0 {
 		slog.Info("验证失败", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt, "provided_answer", provided)
-		_ = h.reject(ctx, b, pending, formatMarkdown(userI18n, "verify.wrong_answer", nil))
+		_ = h.reject(ctx, b, pending, utils.FormatMarkdown(userI18n, "verify.wrong_answer", nil))
 		return
 	}
 	_ = h.store.UpdatePendingAttempts(ctx, pending.TelegramID, pending.ChatID, attemptsLeft)
 	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    msg.Chat.ID,
-		Text:      formatMarkdown(userI18n, "verify.wrong_answer_retry", map[string]string{"tries": formatCode(strconv.Itoa(attemptsLeft))}),
+		Text:      utils.FormatMarkdown(userI18n, "verify.wrong_answer_retry", map[string]string{"tries": utils.FormatCode(strconv.Itoa(attemptsLeft))}),
 		ParseMode: "MarkdownV2",
 	})
 }
@@ -334,17 +339,17 @@ func (h *BotHandler) handleGroupMessage(ctx context.Context, b *bot.Bot, msg *mo
 	}
 	switch strings.ToLower(cmd) {
 	case "setrepo":
-		h.commandSetRepo(ctx, b, msg, arg)
+		commands.HandleSetRepo(ctx, b, h.commandContext(), msg, arg)
 	case "setttl":
-		h.commandSetTTL(ctx, b, msg, arg)
+		commands.HandleSetTTL(ctx, b, h.commandContext(), msg, arg)
 	case "settries":
-		h.commandSetTries(ctx, b, msg, arg)
+		commands.HandleSetTries(ctx, b, h.commandContext(), msg, arg)
 	case "setlang":
-		h.commandSetLang(ctx, b, msg, arg)
+		commands.HandleSetLang(ctx, b, h.commandContext(), msg, arg)
 	case "settings":
-		h.commandSettings(ctx, b, msg)
+		commands.HandleSettings(ctx, b, h.commandContext(), msg)
 	case "connect":
-		h.commandConnectGroup(ctx, b, msg)
+		commands.HandleConnect(ctx, b, h.commandContext(), msg, "")
 	}
 }
 
@@ -374,57 +379,79 @@ func (h *BotHandler) handlePrivateCommand(ctx context.Context, b *bot.Bot, msg *
 	}
 	switch cmd {
 	case "connect":
-		h.commandConnectPrivate(ctx, b, msg, arg)
+		commands.HandleConnect(ctx, b, h.commandContext(), msg, arg)
 		return true
 	case "disconnect":
-		h.commandDisconnectPrivate(ctx, b, msg)
+		commands.HandleDisconnect(ctx, b, h.commandContext(), msg)
 		return true
 	case "settings":
-		h.commandSettingsPrivate(ctx, b, msg)
+		commands.HandleSettings(ctx, b, h.commandContext(), msg)
 		return true
 	case "setrepo":
-		h.commandSetRepoPrivate(ctx, b, msg, arg)
+		commands.HandleSetRepo(ctx, b, h.commandContext(), msg, arg)
 		return true
 	case "setttl":
-		h.commandSetTTLPrivate(ctx, b, msg, arg)
+		commands.HandleSetTTL(ctx, b, h.commandContext(), msg, arg)
 		return true
 	case "settries":
-		h.commandSetTriesPrivate(ctx, b, msg, arg)
+		commands.HandleSetTries(ctx, b, h.commandContext(), msg, arg)
 		return true
 	case "setlang":
-		h.commandSetLangPrivate(ctx, b, msg, arg)
+		commands.HandleSetLang(ctx, b, h.commandContext(), msg, arg)
 		return true
 	case "try":
-		h.commandTryPrivate(ctx, b, msg, arg)
+		commands.HandleTry(ctx, b, h.commandContext(), msg, arg)
 		return true
 	default:
 		return false
 	}
 }
 
-func (h *BotHandler) i18nForUser(user *models.User, chatCfg ChatConfig) *I18n {
+func (h *BotHandler) commandContext() *commands.Context {
+	return &commands.Context{
+		Store:              h.store,
+		Verifier:           h.verifier,
+		DefaultI18n:        h.i18n,
+		DefaultLang:        h.cfg.Language,
+		DefaultQuestionTTL: h.cfg.QuestionTTL,
+		DefaultMaxAttempts: h.cfg.MaxAttempts,
+		DefaultFilePath:    h.cfg.FilePath,
+		DefaultFileLine:    h.cfg.FileLine,
+		I18nForUser:        h.i18nForUser,
+		I18nForChat:        h.i18nForChat,
+		ApplyChatDefaults:  h.applyChatDefaults,
+		GetConnectedChat:   h.getConnectedChat,
+		SetConnectedChat:   h.setConnectedChat,
+		ClearConnectedChat: h.clearConnectedChat,
+		IsGroupAdmin:       h.isGroupAdmin,
+		SendReply:          h.sendGroupReply,
+		ClearWarn:          h.clearWarn,
+	}
+}
+
+func (h *BotHandler) i18nForUser(user *models.User, chatCfg appmodels.ChatConfig) *utils.I18n {
 	lang := ""
 	if user != nil {
-		lang = NormalizeLang(user.LanguageCode)
+		lang = utils.NormalizeLang(user.LanguageCode)
 	}
 	if lang == "" {
-		lang = NormalizeLang(chatCfg.DefaultLang)
+		lang = utils.NormalizeLang(chatCfg.DefaultLang)
 	}
 	if lang == "" {
-		lang = NormalizeLang(h.cfg.Language)
+		lang = utils.NormalizeLang(h.cfg.Language)
 	}
 	return h.getI18n(lang)
 }
 
-func (h *BotHandler) i18nForChat(chatCfg ChatConfig) *I18n {
-	lang := NormalizeLang(chatCfg.DefaultLang)
+func (h *BotHandler) i18nForChat(chatCfg appmodels.ChatConfig) *utils.I18n {
+	lang := utils.NormalizeLang(chatCfg.DefaultLang)
 	if lang == "" {
-		lang = NormalizeLang(h.cfg.Language)
+		lang = utils.NormalizeLang(h.cfg.Language)
 	}
 	return h.getI18n(lang)
 }
 
-func (h *BotHandler) getI18n(lang string) *I18n {
+func (h *BotHandler) getI18n(lang string) *utils.I18n {
 	if lang == "" {
 		return h.i18n
 	}
@@ -434,7 +461,7 @@ func (h *BotHandler) getI18n(lang string) *I18n {
 		return cached
 	}
 	h.i18nMu.RUnlock()
-	loaded, err := LoadI18n(lang)
+	loaded, err := utils.LoadI18n(lang)
 	if err != nil {
 		return h.i18n
 	}
@@ -444,7 +471,7 @@ func (h *BotHandler) getI18n(lang string) *I18n {
 	return loaded
 }
 
-func (h *BotHandler) applyChatDefaults(cfg ChatConfig) ChatConfig {
+func (h *BotHandler) applyChatDefaults(cfg appmodels.ChatConfig) appmodels.ChatConfig {
 	if cfg.QuestionTTL == 0 {
 		cfg.QuestionTTL = h.cfg.QuestionTTL
 	}
@@ -474,404 +501,6 @@ func (h *BotHandler) clearConnectedChat(userID int64) {
 	h.connMu.Lock()
 	delete(h.connMap, userID)
 	h.connMu.Unlock()
-}
-
-func (h *BotHandler) commandSetRepo(ctx context.Context, b *bot.Bot, msg *models.Message, repo string) {
-	chatCfg, _ := h.store.GetChatConfig(ctx, msg.Chat.ID)
-	chatCfg = h.applyChatDefaults(chatCfg)
-	i18n := h.i18nForChat(chatCfg)
-	h.commandSetRepoForChat(ctx, b, msg.From, msg.Chat.ID, repo, msg.Chat.ID, i18n)
-}
-
-func (h *BotHandler) commandSetRepoForChat(ctx context.Context, b *bot.Bot, actor *models.User, targetChatID int64, repo string, replyChatID int64, i18n *I18n) {
-	repo = strings.TrimSpace(repo)
-	if repo == "" {
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(i18n, "group.setrepo.usage", nil))
-		return
-	}
-	if _, _, err := parseRepo(repo); err != nil {
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(i18n, "group.setrepo.invalid", nil))
-		return
-	}
-	if actor == nil || !h.isGroupAdmin(ctx, b, targetChatID, actor.ID) {
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(i18n, "group.setrepo.admin_only", nil))
-		return
-	}
-	cfg := ChatConfig{ChatID: targetChatID, Repo: repo, UpdatedAt: time.Now()}
-	existing, err := h.store.GetChatConfig(ctx, targetChatID)
-	if err == nil {
-		cfg.FilePath = existing.FilePath
-		cfg.FileLine = existing.FileLine
-		cfg.QuestionTTL = existing.QuestionTTL
-		cfg.MaxAttempts = existing.MaxAttempts
-		cfg.DefaultLang = existing.DefaultLang
-	} else if errors.Is(err, sql.ErrNoRows) {
-		cfg.FilePath = h.cfg.FilePath
-		cfg.FileLine = h.cfg.FileLine
-		cfg.QuestionTTL = h.cfg.QuestionTTL
-		cfg.MaxAttempts = h.cfg.MaxAttempts
-		cfg.DefaultLang = h.cfg.Language
-	} else {
-		slog.Error("读取群配置失败", "error", err, "chat_id", targetChatID)
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	if err := h.store.UpsertChatConfig(ctx, cfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", targetChatID)
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	h.clearWarn(targetChatID)
-	actorName := "admin:" + strconv.FormatInt(actor.ID, 10)
-	_ = h.store.InsertAudit(ctx, "set_repo", actorName, repo)
-	h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(i18n, "group.setrepo.success", map[string]string{"repo": formatRepoLink(repo)}))
-}
-
-func (h *BotHandler) commandSetTTL(ctx context.Context, b *bot.Bot, msg *models.Message, ttlText string) {
-	i18n := h.i18nForChat(ChatConfig{DefaultLang: h.cfg.Language})
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, msg.Chat.ID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	i18n = h.i18nForChat(chatCfg)
-	if strings.TrimSpace(ttlText) == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setttl.usage", nil))
-		return
-	}
-	ttl, err := time.ParseDuration(ttlText)
-	if err != nil || ttl <= 0 {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setttl.invalid", nil))
-		return
-	}
-	chatCfg.QuestionTTL = ttl
-	chatCfg.UpdatedAt = time.Now()
-	if err := h.store.UpsertChatConfig(ctx, chatCfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", msg.Chat.ID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	_ = h.store.InsertAudit(ctx, "set_ttl", "admin:"+strconv.FormatInt(msg.From.ID, 10), ttl.String())
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setttl.success", map[string]string{"ttl": formatCode(formatDuration(ttl))}))
-}
-
-func (h *BotHandler) commandSetTries(ctx context.Context, b *bot.Bot, msg *models.Message, triesText string) {
-	i18n := h.i18nForChat(ChatConfig{DefaultLang: h.cfg.Language})
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, msg.Chat.ID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	i18n = h.i18nForChat(chatCfg)
-	triesText = strings.TrimSpace(triesText)
-	if triesText == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.settries.usage", nil))
-		return
-	}
-	tries, err := strconv.Atoi(triesText)
-	if err != nil || tries <= 0 {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.settries.invalid", nil))
-		return
-	}
-	chatCfg.MaxAttempts = tries
-	chatCfg.UpdatedAt = time.Now()
-	if err := h.store.UpsertChatConfig(ctx, chatCfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", msg.Chat.ID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	_ = h.store.InsertAudit(ctx, "set_tries", "admin:"+strconv.FormatInt(msg.From.ID, 10), strconv.Itoa(tries))
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.settries.success", map[string]string{"tries": formatCode(strconv.Itoa(tries))}))
-}
-
-func (h *BotHandler) commandSetLang(ctx context.Context, b *bot.Bot, msg *models.Message, lang string) {
-	i18n := h.i18nForChat(ChatConfig{DefaultLang: h.cfg.Language})
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, msg.Chat.ID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	i18n = h.i18nForChat(chatCfg)
-	lang = NormalizeLang(lang)
-	if lang == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setlang.usage", nil))
-		return
-	}
-	if !IsLangAvailable(lang) {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setlang.invalid", map[string]string{"lang": formatCode(lang)}))
-		return
-	}
-	chatCfg.DefaultLang = lang
-	chatCfg.UpdatedAt = time.Now()
-	if err := h.store.UpsertChatConfig(ctx, chatCfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", msg.Chat.ID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	_ = h.store.InsertAudit(ctx, "set_lang", "admin:"+strconv.FormatInt(msg.From.ID, 10), lang)
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setlang.success", map[string]string{"lang": formatCode(lang)}))
-}
-
-func (h *BotHandler) commandSettings(ctx context.Context, b *bot.Bot, msg *models.Message) {
-	i18n := h.i18nForChat(ChatConfig{DefaultLang: h.cfg.Language})
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, msg.Chat.ID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	chatCfg = h.applyChatDefaults(chatCfg)
-	i18n = h.i18nForChat(chatCfg)
-	path := chatCfg.FilePath
-	line := "-"
-	if path == "" || chatCfg.FileLine <= 0 {
-		path = "-"
-	} else {
-		line = strconv.Itoa(chatCfg.FileLine)
-	}
-	text := formatMarkdown(i18n, "group.settings", map[string]string{
-		"repo":  formatRepoLink(chatCfg.Repo),
-		"path":  formatCode(path),
-		"line":  formatCode(line),
-		"ttl":   formatCode(formatDuration(chatCfg.QuestionTTL)),
-		"tries": formatCode(strconv.Itoa(chatCfg.MaxAttempts)),
-		"lang":  formatCode(chatCfg.DefaultLang),
-	})
-	h.sendGroupReply(ctx, b, msg.Chat.ID, text)
-}
-
-func (h *BotHandler) commandConnectGroup(ctx context.Context, b *bot.Bot, msg *models.Message) {
-	if !h.isGroupAdmin(ctx, b, msg.Chat.ID, msg.From.ID) {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(h.i18n, "group.setrepo.admin_only", nil))
-		return
-	}
-	text := formatMarkdown(h.i18n, "group.connect.hint", map[string]string{"chat_id": formatCode(strconv.FormatInt(msg.Chat.ID, 10))})
-	h.sendGroupReply(ctx, b, msg.Chat.ID, text)
-}
-
-func (h *BotHandler) commandConnectPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, chatIDText string) {
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	chatIDText = strings.TrimSpace(chatIDText)
-	if chatIDText == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.connect.usage", nil))
-		return
-	}
-	chatID, err := strconv.ParseInt(chatIDText, 10, 64)
-	if err != nil || chatID == 0 {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.connect.usage", nil))
-		return
-	}
-	if !h.isGroupAdmin(ctx, b, chatID, msg.From.ID) {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.connect.not_admin", nil))
-		return
-	}
-	h.setConnectedChat(msg.From.ID, chatID)
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.connect.success", map[string]string{"chat_id": formatCode(chatIDText)}))
-}
-
-func (h *BotHandler) commandDisconnectPrivate(ctx context.Context, b *bot.Bot, msg *models.Message) {
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if _, ok := h.getConnectedChat(msg.From.ID); !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.disconnect.none", nil))
-		return
-	}
-	h.clearConnectedChat(msg.From.ID)
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.disconnect.success", nil))
-}
-
-func (h *BotHandler) commandSettingsPrivate(ctx context.Context, b *bot.Bot, msg *models.Message) {
-	chatID, ok := h.getConnectedChat(msg.From.ID)
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
-		return
-	}
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, chatID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	chatCfg = h.applyChatDefaults(chatCfg)
-	path := chatCfg.FilePath
-	line := "-"
-	if path == "" || chatCfg.FileLine <= 0 {
-		path = "-"
-	} else {
-		line = strconv.Itoa(chatCfg.FileLine)
-	}
-	text := formatMarkdown(i18n, "group.settings", map[string]string{
-		"repo":  formatRepoLink(chatCfg.Repo),
-		"path":  formatCode(path),
-		"line":  formatCode(line),
-		"ttl":   formatCode(formatDuration(chatCfg.QuestionTTL)),
-		"tries": formatCode(strconv.Itoa(chatCfg.MaxAttempts)),
-		"lang":  formatCode(chatCfg.DefaultLang),
-	})
-	h.sendGroupReply(ctx, b, msg.Chat.ID, text)
-}
-
-func (h *BotHandler) commandTryPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, qType string) {
-	chatID, ok := h.getConnectedChat(msg.From.ID)
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
-		return
-	}
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, chatID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	chatCfg = h.applyChatDefaults(chatCfg)
-
-	qType = strings.TrimSpace(qType)
-	if qType == "" {
-		types, err := h.verifier.AvailableQuestionTypes(ctx, chatCfg, i18n)
-		if err != nil {
-			slog.Error("获取可用题型失败", "error", err, "chat_id", chatID)
-			h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-			return
-		}
-		if len(types) == 0 {
-			h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.types_empty", nil))
-			return
-		}
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.types", map[string]string{"types": formatTypeList(types)}))
-		return
-	}
-
-	q, ok, err := h.verifier.GenerateQuestionByType(ctx, chatCfg, i18n, qType)
-	if err != nil {
-		if errors.Is(err, ErrUnknownQuestionType) {
-			types := h.verifier.SupportedQuestionTypes()
-			h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.invalid", map[string]string{"type": formatCode(qType), "types": formatTypeList(types)}))
-			return
-		}
-		slog.Error("生成题目失败", "error", err, "chat_id", chatID, "type", qType)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.unavailable", map[string]string{"type": formatCode(qType)}))
-		return
-	}
-	text := formatMarkdown(i18n, "private.try.question", map[string]string{"question": q.Prompt, "answer": formatCode(q.Answer)})
-	h.sendGroupReply(ctx, b, msg.Chat.ID, text)
-}
-
-func (h *BotHandler) commandSetRepoPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, repo string) {
-	chatID, ok := h.getConnectedChat(msg.From.ID)
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
-		return
-	}
-	h.commandSetRepoForChat(ctx, b, msg.From, chatID, repo, msg.Chat.ID, i18n)
-}
-
-func (h *BotHandler) commandSetTTLPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, ttlText string) {
-	chatID, ok := h.getConnectedChat(msg.From.ID)
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
-		return
-	}
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, chatID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	if strings.TrimSpace(ttlText) == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setttl.usage", nil))
-		return
-	}
-	ttl, err := time.ParseDuration(ttlText)
-	if err != nil || ttl <= 0 {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setttl.invalid", nil))
-		return
-	}
-	chatCfg.QuestionTTL = ttl
-	chatCfg.UpdatedAt = time.Now()
-	if err := h.store.UpsertChatConfig(ctx, chatCfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", chatID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	_ = h.store.InsertAudit(ctx, "set_ttl", "admin:"+strconv.FormatInt(msg.From.ID, 10), ttl.String())
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setttl.success", map[string]string{"ttl": formatCode(formatDuration(ttl))}))
-}
-
-func (h *BotHandler) commandSetTriesPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, triesText string) {
-	chatID, ok := h.getConnectedChat(msg.From.ID)
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
-		return
-	}
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, chatID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	triesText = strings.TrimSpace(triesText)
-	if triesText == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.settries.usage", nil))
-		return
-	}
-	tries, err := strconv.Atoi(triesText)
-	if err != nil || tries <= 0 {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.settries.invalid", nil))
-		return
-	}
-	chatCfg.MaxAttempts = tries
-	chatCfg.UpdatedAt = time.Now()
-	if err := h.store.UpsertChatConfig(ctx, chatCfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", chatID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	_ = h.store.InsertAudit(ctx, "set_tries", "admin:"+strconv.FormatInt(msg.From.ID, 10), strconv.Itoa(tries))
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.settries.success", map[string]string{"tries": formatCode(strconv.Itoa(tries))}))
-}
-
-func (h *BotHandler) commandSetLangPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, lang string) {
-	chatID, ok := h.getConnectedChat(msg.From.ID)
-	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
-	if !ok {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
-		return
-	}
-	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, chatID, msg.From, msg.Chat.ID)
-	if !ok {
-		return
-	}
-	lang = NormalizeLang(lang)
-	if lang == "" {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setlang.usage", nil))
-		return
-	}
-	if !IsLangAvailable(lang) {
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setlang.invalid", map[string]string{"lang": formatCode(lang)}))
-		return
-	}
-	chatCfg.DefaultLang = lang
-	chatCfg.UpdatedAt = time.Now()
-	if err := h.store.UpsertChatConfig(ctx, chatCfg); err != nil {
-		slog.Error("写入群配置失败", "error", err, "chat_id", chatID)
-		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
-		return
-	}
-	_ = h.store.InsertAudit(ctx, "set_lang", "admin:"+strconv.FormatInt(msg.From.ID, 10), lang)
-	h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.setlang.success", map[string]string{"lang": formatCode(lang)}))
-}
-
-func (h *BotHandler) getChatConfigForUpdate(ctx context.Context, b *bot.Bot, targetChatID int64, actor *models.User, replyChatID int64) (ChatConfig, bool) {
-	if actor == nil || !h.isGroupAdmin(ctx, b, targetChatID, actor.ID) {
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(h.i18n, "group.setrepo.admin_only", nil))
-		return ChatConfig{}, false
-	}
-	chatCfg, err := h.store.GetChatConfig(ctx, targetChatID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(h.i18n, "group.config_missing", nil))
-			return ChatConfig{}, false
-		}
-		slog.Error("读取群配置失败", "error", err, "chat_id", targetChatID)
-		h.sendGroupReply(ctx, b, replyChatID, formatMarkdown(h.i18n, "group.save_failed", nil))
-		return ChatConfig{}, false
-	}
-	return h.applyChatDefaults(chatCfg), true
 }
 
 func (h *BotHandler) isGroupAdmin(ctx context.Context, b *bot.Bot, chatID, userID int64) bool {
@@ -929,17 +558,6 @@ func (h *BotHandler) clearWarn(chatID int64) {
 	h.warnMu.Unlock()
 }
 
-func formatTypeList(types []string) string {
-	if len(types) == 0 {
-		return formatCode("-")
-	}
-	formatted := make([]string, 0, len(types))
-	for _, t := range types {
-		formatted = append(formatted, formatCode(t))
-	}
-	return strings.Join(formatted, ", ")
-}
-
 func (h *BotHandler) handleMyChatMember(ctx context.Context, b *bot.Bot, upd *models.ChatMemberUpdated) {
 	if upd == nil || upd.Chat.ID == 0 {
 		return
@@ -956,17 +574,17 @@ func (h *BotHandler) handleMyChatMember(ctx context.Context, b *bot.Bot, upd *mo
 	}
 }
 
-func (h *BotHandler) sendQuestionAgain(ctx context.Context, b *bot.Bot, chatID int64, questionID int64, ttl time.Duration, i18n *I18n) {
+func (h *BotHandler) sendQuestionAgain(ctx context.Context, b *bot.Bot, chatID int64, questionID int64, ttl time.Duration, i18n *utils.I18n) {
 	question, err := h.store.GetQuestion(ctx, questionID)
 	if err != nil {
 		return
 	}
 	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text: formatMarkdown(i18n, "verify.prompt_again", map[string]string{
-			"ttl":      formatCode(formatDuration(ttl)),
+		Text: utils.FormatMarkdown(i18n, "verify.prompt_again", map[string]string{
+			"ttl":      utils.FormatCode(utils.FormatDuration(ttl)),
 			"question": question.Prompt,
-			"repo":     formatRepoLink(question.Repo),
+			"repo":     utils.FormatRepoLink(question.Repo),
 		}),
 		ParseMode: "MarkdownV2",
 	})
@@ -976,7 +594,7 @@ func (h *BotHandler) onBotAddedToChat(ctx context.Context, b *bot.Bot, upd *mode
 	chatID := upd.Chat.ID
 	missing := missingPermissions(upd.NewChatMember)
 	if len(missing) > 0 {
-		msg := formatMarkdown(h.i18n, "group.permissions_missing", map[string]string{"missing": formatCode(strings.Join(missing, "、"))})
+		msg := utils.FormatMarkdown(h.i18n, "group.permissions_missing", map[string]string{"missing": utils.FormatCode(strings.Join(missing, "、"))})
 		h.sendGroupReply(ctx, b, chatID, msg)
 		slog.Warn("机器人权限不足", "chat_id", chatID, "missing", strings.Join(missing, ","))
 	} else {
@@ -990,7 +608,7 @@ func (h *BotHandler) onBotAddedToChat(ctx context.Context, b *bot.Bot, upd *mode
 		}
 	} else if chatInfo != nil {
 		if !chatRequiresJoinApproval(chatInfo) {
-			h.sendGroupReply(ctx, b, chatID, formatMarkdown(h.i18n, "group.join_request_required", nil))
+			h.sendGroupReply(ctx, b, chatID, utils.FormatMarkdown(h.i18n, "group.join_request_required", nil))
 			slog.Warn("群未开启加入审核", "chat_id", chatID)
 		} else {
 			slog.Info("群已开启加入审核", "chat_id", chatID)
@@ -1018,7 +636,7 @@ func (h *BotHandler) onBotRemovedFromChat(ctx context.Context, chatID int64) {
 	slog.Info("已清除群配置", "chat_id", chatID)
 }
 
-func (h *BotHandler) approve(ctx context.Context, b *bot.Bot, pending PendingMember) error {
+func (h *BotHandler) approve(ctx context.Context, b *bot.Bot, pending appmodels.PendingMember) error {
 	_, err := b.ApproveChatJoinRequest(ctx, &bot.ApproveChatJoinRequestParams{
 		ChatID: pending.ChatID,
 		UserID: pending.TelegramID,
@@ -1031,7 +649,7 @@ func (h *BotHandler) approve(ctx context.Context, b *bot.Bot, pending PendingMem
 	return nil
 }
 
-func (h *BotHandler) reject(ctx context.Context, b *bot.Bot, pending PendingMember, reason string) error {
+func (h *BotHandler) reject(ctx context.Context, b *bot.Bot, pending appmodels.PendingMember, reason string) error {
 	_, err := b.DeclineChatJoinRequest(ctx, &bot.DeclineChatJoinRequestParams{
 		ChatID: pending.ChatID,
 		UserID: pending.TelegramID,
@@ -1056,7 +674,7 @@ func (h *BotHandler) reject(ctx context.Context, b *bot.Bot, pending PendingMemb
 	return err
 }
 
-func (h *BotHandler) ensureChatConfig(ctx context.Context, b *bot.Bot, chatID int64) (ChatConfig, bool) {
+func (h *BotHandler) ensureChatConfig(ctx context.Context, b *bot.Bot, chatID int64) (appmodels.ChatConfig, bool) {
 	cfg, err := h.store.GetChatConfig(ctx, chatID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1064,7 +682,7 @@ func (h *BotHandler) ensureChatConfig(ctx context.Context, b *bot.Bot, chatID in
 		} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			slog.Error("读取群配置失败", "error", err, "chat_id", chatID)
 		}
-		return ChatConfig{}, false
+		return appmodels.ChatConfig{}, false
 	}
 	return h.applyChatDefaults(cfg), true
 }
@@ -1079,7 +697,7 @@ func (h *BotHandler) notifyMissingConfig(ctx context.Context, b *bot.Bot, chatID
 	h.lastWarn[chatID] = time.Now()
 	h.warnMu.Unlock()
 
-	text := formatMarkdown(h.i18n, "group.config_missing", nil)
+	text := utils.FormatMarkdown(h.i18n, "group.config_missing", nil)
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ParseMode: "MarkdownV2"}); err != nil {
 		slog.Warn("发送配置提醒失败", "error", err, "chat_id", chatID)
 	}
@@ -1145,27 +763,4 @@ func chatRequiresJoinApproval(chat *models.ChatFullInfo) bool {
 		return true
 	}
 	return false
-}
-
-func normalizeAnswer(text string) string {
-	text = strings.TrimSpace(text)
-	text = strings.ReplaceAll(text, "\u00a0", " ")
-	text = strings.ToLower(text)
-	return strings.TrimSpace(text)
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "0s"
-	}
-	if d%time.Hour == 0 {
-		return strconv.FormatInt(int64(d/time.Hour), 10) + "h"
-	}
-	if d%time.Minute == 0 {
-		return strconv.FormatInt(int64(d/time.Minute), 10) + "m"
-	}
-	if d%time.Second == 0 {
-		return strconv.FormatInt(int64(d/time.Second), 10) + "s"
-	}
-	return d.String()
 }

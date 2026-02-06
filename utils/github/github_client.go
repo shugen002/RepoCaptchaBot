@@ -1,4 +1,4 @@
-package main
+package github
 
 import (
 	"context"
@@ -77,8 +77,16 @@ func splitRepo(repo string) (string, string) {
 	return repo, ""
 }
 
+func ParseRepo(repo string) (string, string, error) {
+	owner, name := splitRepo(repo)
+	if owner == "" || name == "" {
+		return "", "", fmt.Errorf("repo 格式不正确: %s", repo)
+	}
+	return owner, name, nil
+}
+
 func (c *GitHubClient) GetRepo(ctx context.Context, fullRepo string) (RepoInfo, error) {
-	owner, repo, err := parseRepo(fullRepo)
+	owner, repo, err := ParseRepo(fullRepo)
 	if err != nil {
 		return RepoInfo{}, err
 	}
@@ -108,7 +116,7 @@ func (c *GitHubClient) GetRepo(ctx context.Context, fullRepo string) (RepoInfo, 
 }
 
 func (c *GitHubClient) GetLatestCommit(ctx context.Context, fullRepo string) (CommitInfo, error) {
-	owner, repo, err := parseRepo(fullRepo)
+	owner, repo, err := ParseRepo(fullRepo)
 	if err != nil {
 		return CommitInfo{}, err
 	}
@@ -158,7 +166,7 @@ func (c *GitHubClient) GetLatestCommitSHA(ctx context.Context, fullRepo string) 
 }
 
 func (c *GitHubClient) GetLatestRelease(ctx context.Context, fullRepo string) (ReleaseInfo, error) {
-	owner, repo, err := parseRepo(fullRepo)
+	owner, repo, err := ParseRepo(fullRepo)
 	if err != nil {
 		return ReleaseInfo{}, err
 	}
@@ -194,7 +202,7 @@ func (c *GitHubClient) GetFileLine(ctx context.Context, fullRepo, path string, l
 	if line <= 0 {
 		return "", errors.New("行号必须大于 0")
 	}
-	owner, repo, err := parseRepo(fullRepo)
+	owner, repo, err := ParseRepo(fullRepo)
 	if err != nil {
 		return "", err
 	}
@@ -224,7 +232,7 @@ func (c *GitHubClient) GetFileLine(ctx context.Context, fullRepo, path string, l
 }
 
 func (c *GitHubClient) GetFileContent(ctx context.Context, fullRepo, path string) (string, error) {
-	owner, repo, err := parseRepo(fullRepo)
+	owner, repo, err := ParseRepo(fullRepo)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +264,7 @@ func (c *GitHubClient) GetRepoFileList(ctx context.Context, fullRepo, commitSHA 
 	if maxDepth <= 0 {
 		maxDepth = 2
 	}
-	owner, repo, err := parseRepo(fullRepo)
+	owner, repo, err := ParseRepo(fullRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -302,14 +310,6 @@ func (c *GitHubClient) GetRepoFileList(ctx context.Context, fullRepo, commitSHA 
 		files = append(files, item.Path)
 	}
 	return files, nil
-}
-
-func parseRepo(repo string) (string, string, error) {
-	owner, name := splitRepo(repo)
-	if owner == "" || name == "" {
-		return "", "", fmt.Errorf("repo 格式不正确: %s", repo)
-	}
-	return owner, name, nil
 }
 
 func (c *GitHubClient) getJSON(ctx context.Context, url string, dest interface{}) error {
