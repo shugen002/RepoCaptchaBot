@@ -46,7 +46,7 @@ func main() {
 	}
 
 	ghClient := NewGitHubClient(cfg.GithubToken)
-	verifier := NewVerifier(ghClient)
+	verifier := NewVerifier(ghClient, store)
 	handler := NewBotHandler(cfg, store, verifier, i18n)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()

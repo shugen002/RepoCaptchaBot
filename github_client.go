@@ -51,6 +51,7 @@ type RepoInfo struct {
 type CommitInfo struct {
 	AuthorName string
 	Message    string
+	SHA        string
 }
 
 type ReleaseInfo struct {
@@ -122,6 +123,7 @@ func (c *GitHubClient) GetLatestCommit(ctx context.Context, fullRepo string) (Co
 	c.mu.Unlock()
 
 	var resp []struct {
+		SHA    string `json:"sha"`
 		Commit struct {
 			Author struct {
 				Name string `json:"name"`
@@ -136,12 +138,23 @@ func (c *GitHubClient) GetLatestCommit(ctx context.Context, fullRepo string) (Co
 	if len(resp) == 0 {
 		return CommitInfo{}, errors.New("未找到提交记录")
 	}
-	info := CommitInfo{AuthorName: resp[0].Commit.Author.Name, Message: resp[0].Commit.Message}
+	info := CommitInfo{AuthorName: resp[0].Commit.Author.Name, Message: resp[0].Commit.Message, SHA: resp[0].SHA}
 
 	c.mu.Lock()
 	c.commitCache[key] = cacheCommit{data: info, expires: time.Now().Add(githubCacheTTL)}
 	c.mu.Unlock()
 	return info, nil
+}
+
+func (c *GitHubClient) GetLatestCommitSHA(ctx context.Context, fullRepo string) (string, error) {
+	info, err := c.GetLatestCommit(ctx, fullRepo)
+	if err != nil {
+		return "", err
+	}
+	if info.SHA == "" {
+		return "", errors.New("无法获取最新提交哈希")
+	}
+	return info.SHA, nil
 }
 
 func (c *GitHubClient) GetLatestRelease(ctx context.Context, fullRepo string) (ReleaseInfo, error) {
@@ -208,6 +221,87 @@ func (c *GitHubClient) GetFileLine(ctx context.Context, fullRepo, path string, l
 		return "", fmt.Errorf("行号超出范围：%d", len(lines))
 	}
 	return strings.TrimRight(lines[line-1], "\r"), nil
+}
+
+func (c *GitHubClient) GetFileContent(ctx context.Context, fullRepo, path string) (string, error) {
+	owner, repo, err := parseRepo(fullRepo)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/contents/%s", c.baseURL, owner, repo, strings.TrimPrefix(path, "/"))
+	if err := c.getJSON(ctx, url, &resp); err != nil {
+		return "", err
+	}
+
+	if resp.Encoding != "base64" {
+		return "", errors.New("不支持的文件编码")
+	}
+
+	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(resp.Content, "\n", ""))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (c *GitHubClient) GetRepoFileList(ctx context.Context, fullRepo, commitSHA string, maxDepth int) ([]string, error) {
+	if strings.TrimSpace(commitSHA) == "" {
+		return nil, errors.New("commit hash 不能为空")
+	}
+	if maxDepth <= 0 {
+		maxDepth = 2
+	}
+	owner, repo, err := parseRepo(fullRepo)
+	if err != nil {
+		return nil, err
+	}
+
+	var commitResp struct {
+		Commit struct {
+			Tree struct {
+				SHA string `json:"sha"`
+			} `json:"tree"`
+		} `json:"commit"`
+	}
+	commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s", c.baseURL, owner, repo, commitSHA)
+	if err := c.getJSON(ctx, commitURL, &commitResp); err != nil {
+		return nil, err
+	}
+	if commitResp.Commit.Tree.SHA == "" {
+		return nil, errors.New("无法获取提交树哈希")
+	}
+
+	var treeResp struct {
+		Tree []struct {
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"tree"`
+	}
+	treeURL := fmt.Sprintf("%s/repos/%s/%s/git/trees/%s?recursive=1", c.baseURL, owner, repo, commitResp.Commit.Tree.SHA)
+	if err := c.getJSON(ctx, treeURL, &treeResp); err != nil {
+		return nil, err
+	}
+
+	files := make([]string, 0, len(treeResp.Tree))
+	for _, item := range treeResp.Tree {
+		if item.Type != "blob" {
+			continue
+		}
+		if item.Path == "" {
+			continue
+		}
+		depth := len(strings.Split(item.Path, "/"))
+		if depth > maxDepth {
+			continue
+		}
+		files = append(files, item.Path)
+	}
+	return files, nil
 }
 
 func parseRepo(repo string) (string, string, error) {

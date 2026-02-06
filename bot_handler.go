@@ -394,6 +394,9 @@ func (h *BotHandler) handlePrivateCommand(ctx context.Context, b *bot.Bot, msg *
 	case "setlang":
 		h.commandSetLangPrivate(ctx, b, msg, arg)
 		return true
+	case "try":
+		h.commandTryPrivate(ctx, b, msg, arg)
+		return true
 	default:
 		return false
 	}
@@ -701,6 +704,54 @@ func (h *BotHandler) commandSettingsPrivate(ctx context.Context, b *bot.Bot, msg
 	h.sendGroupReply(ctx, b, msg.Chat.ID, text)
 }
 
+func (h *BotHandler) commandTryPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, qType string) {
+	chatID, ok := h.getConnectedChat(msg.From.ID)
+	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
+	if !ok {
+		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.need_connect", nil))
+		return
+	}
+	chatCfg, ok := h.getChatConfigForUpdate(ctx, b, chatID, msg.From, msg.Chat.ID)
+	if !ok {
+		return
+	}
+	chatCfg = h.applyChatDefaults(chatCfg)
+
+	qType = strings.TrimSpace(qType)
+	if qType == "" {
+		types, err := h.verifier.AvailableQuestionTypes(ctx, chatCfg, i18n)
+		if err != nil {
+			slog.Error("获取可用题型失败", "error", err, "chat_id", chatID)
+			h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
+			return
+		}
+		if len(types) == 0 {
+			h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.types_empty", nil))
+			return
+		}
+		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.types", map[string]string{"types": formatTypeList(types)}))
+		return
+	}
+
+	q, ok, err := h.verifier.GenerateQuestionByType(ctx, chatCfg, i18n, qType)
+	if err != nil {
+		if errors.Is(err, ErrUnknownQuestionType) {
+			types := h.verifier.SupportedQuestionTypes()
+			h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.invalid", map[string]string{"type": formatCode(qType), "types": formatTypeList(types)}))
+			return
+		}
+		slog.Error("生成题目失败", "error", err, "chat_id", chatID, "type", qType)
+		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "group.save_failed", nil))
+		return
+	}
+	if !ok {
+		h.sendGroupReply(ctx, b, msg.Chat.ID, formatMarkdown(i18n, "private.try.unavailable", map[string]string{"type": formatCode(qType)}))
+		return
+	}
+	text := formatMarkdown(i18n, "private.try.question", map[string]string{"question": q.Prompt, "answer": formatCode(q.Answer)})
+	h.sendGroupReply(ctx, b, msg.Chat.ID, text)
+}
+
 func (h *BotHandler) commandSetRepoPrivate(ctx context.Context, b *bot.Bot, msg *models.Message, repo string) {
 	chatID, ok := h.getConnectedChat(msg.From.ID)
 	i18n := h.i18nForUser(msg.From, ChatConfig{DefaultLang: h.cfg.Language})
@@ -876,6 +927,17 @@ func (h *BotHandler) clearWarn(chatID int64) {
 	h.warnMu.Lock()
 	delete(h.lastWarn, chatID)
 	h.warnMu.Unlock()
+}
+
+func formatTypeList(types []string) string {
+	if len(types) == 0 {
+		return formatCode("-")
+	}
+	formatted := make([]string, 0, len(types))
+	for _, t := range types {
+		formatted = append(formatted, formatCode(t))
+	}
+	return strings.Join(formatted, ", ")
 }
 
 func (h *BotHandler) handleMyChatMember(ctx context.Context, b *bot.Bot, upd *models.ChatMemberUpdated) {

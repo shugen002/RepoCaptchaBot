@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -28,6 +29,13 @@ type StoredQuestion struct {
 	Payload   string
 	Answer    string
 	CreatedAt time.Time
+}
+
+type RepoFileCache struct {
+	Repo       string
+	CommitHash string
+	Files      []string
+	UpdatedAt  time.Time
 }
 
 type ChatConfig struct {
@@ -80,6 +88,12 @@ func (s *Store) Init(ctx context.Context) error {
 			question_ttl INTEGER NOT NULL DEFAULT 0,
 			max_attempts INTEGER NOT NULL DEFAULT 0,
 			default_lang TEXT NOT NULL DEFAULT '',
+			updated_at INTEGER NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS repo_file_cache (
+			repo TEXT PRIMARY KEY,
+			commit_hash TEXT NOT NULL,
+			files TEXT NOT NULL,
 			updated_at INTEGER NOT NULL
 		);`,
 	}
@@ -239,4 +253,42 @@ func (s *Store) DeleteChatData(ctx context.Context, chatID int64) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) GetRepoFileCache(ctx context.Context, repo string) (RepoFileCache, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT repo, commit_hash, files, updated_at FROM repo_file_cache WHERE repo = ?`,
+		repo,
+	)
+	var cache RepoFileCache
+	var filesJSON string
+	var updated int64
+	if err := row.Scan(&cache.Repo, &cache.CommitHash, &filesJSON, &updated); err != nil {
+		return RepoFileCache{}, err
+	}
+	if err := json.Unmarshal([]byte(filesJSON), &cache.Files); err != nil {
+		return RepoFileCache{}, err
+	}
+	cache.UpdatedAt = time.Unix(updated, 0)
+	return cache, nil
+}
+
+func (s *Store) UpsertRepoFileCache(ctx context.Context, cache RepoFileCache) error {
+	if strings.TrimSpace(cache.Repo) == "" {
+		return errors.New("repo 不能为空")
+	}
+	if strings.TrimSpace(cache.CommitHash) == "" {
+		return errors.New("commit_hash 不能为空")
+	}
+	filesJSON, err := json.Marshal(cache.Files)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO repo_file_cache (repo, commit_hash, files, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(repo) DO UPDATE SET commit_hash = excluded.commit_hash, files = excluded.files, updated_at = excluded.updated_at`,
+		cache.Repo, cache.CommitHash, string(filesJSON), cache.UpdatedAt.Unix(),
+	)
+	return err
 }
