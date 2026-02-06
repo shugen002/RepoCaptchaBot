@@ -49,7 +49,7 @@ SQLite 数据文件默认写在 `./repo_captcha_bot.db`，可通过 `DB_PATH` �
 | `QUESTION_TTL` | `120s` | 单次验证时限，`time.ParseDuration` 语法 |
 | `FILE_PATH` | (空) | 默认文件题的文件路径，未配置群时作为初始值 |
 | `FILE_LINE` | `0` | 默认文件题的行号，>0 时才会尝试生成该题型 |
-| `BOT_LANG` | `zh-CN` | 机器人语言，决定加载 `i18n/<lang>.ini` |
+| `BOT_LANG` | `zh-CN` | 机器人语言，决定加载 `lang/<lang>.ini` |
 
 ## 群组使用流程
 
@@ -95,9 +95,9 @@ SQLite 数据文件默认写在 `./repo_captcha_bot.db`，可通过 `DB_PATH` �
 
 ## i18n
 
-每种语言对应一个 `ini` 文件，放在 `i18n/` 目录下，例如：
+每种语言对应一个 `ini` 文件，放在 `lang/` 目录下，例如：
 
-- `i18n/zh-CN.ini`
-- `i18n/en.ini`
+- `lang/zh-CN.ini`
+- `lang/en.ini`
 
 通过 `BOT_LANG` 指定语言标识；若缺省或文件不存在，会回退到 `zh-CN`。

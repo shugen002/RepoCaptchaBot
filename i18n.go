@@ -21,7 +21,7 @@ func LoadI18n(lang string) (*I18n, error) {
 		lang = defaultLang
 	}
 
-	fallback, err := loadIniFile(filepath.Join("i18n", defaultLang+".ini"))
+	fallback, err := loadIniFile(filepath.Join("lang", defaultLang+".ini"))
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func LoadI18n(lang string) (*I18n, error) {
 	}
 
 	if lang != defaultLang {
-		if langMap, err := loadIniFile(filepath.Join("i18n", lang+".ini")); err == nil {
+		if langMap, err := loadIniFile(filepath.Join("lang", lang+".ini")); err == nil {
 			for k, v := range langMap {
 				messages[k] = v
 			}
@@ -91,7 +91,7 @@ func IsLangAvailable(lang string) bool {
 	if lang == "" {
 		return false
 	}
-	path := filepath.Join("i18n", lang+".ini")
+	path := filepath.Join("lang", lang+".ini")
 	if _, err := os.Stat(path); err == nil {
 		return true
 	}
