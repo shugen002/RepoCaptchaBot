@@ -13,7 +13,6 @@ import (
 
 	appmodels "github.com/shugen002/RepoCaptchaBot/models"
 	"github.com/shugen002/RepoCaptchaBot/utils"
-	githubapi "github.com/shugen002/RepoCaptchaBot/utils/github"
 )
 
 func HandleSetRepo(ctx context.Context, b *bot.Bot, env *Context, msg *models.Message, repo string) {
@@ -29,7 +28,7 @@ func HandleSetRepo(ctx context.Context, b *bot.Bot, env *Context, msg *models.Me
 		env.SendReply(ctx, b, replyChatID, utils.FormatMarkdown(i18n, "group.setrepo.usage", nil))
 		return
 	}
-	if _, _, err := githubapi.ParseRepo(repo); err != nil {
+	if !isValidRepo(repo) {
 		env.SendReply(ctx, b, replyChatID, utils.FormatMarkdown(i18n, "group.setrepo.invalid", nil))
 		return
 	}
@@ -63,4 +62,12 @@ func HandleSetRepo(ctx context.Context, b *bot.Bot, env *Context, msg *models.Me
 	actorName := "admin:" + strconv.FormatInt(msg.From.ID, 10)
 	_ = env.Store.InsertAudit(ctx, "set_repo", actorName, repo)
 	env.SendReply(ctx, b, replyChatID, utils.FormatMarkdown(i18n, "group.setrepo.success", map[string]string{"repo": utils.FormatRepoLink(repo)}))
+}
+
+func isValidRepo(repo string) bool {
+	parts := strings.Split(strings.TrimSpace(repo), "/")
+	if len(parts) != 2 {
+		return false
+	}
+	return strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != ""
 }

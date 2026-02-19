@@ -3,13 +3,16 @@ module github.com/shugen002/RepoCaptchaBot
 go 1.25.7
 
 require (
+	github.com/bartventer/httpcache v0.12.0
 	github.com/go-telegram/bot v1.18.0
+	github.com/google/go-github/v83 v83.0.0
 	gopkg.in/ini.v1 v1.67.0
 	modernc.org/sqlite v1.44.3
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

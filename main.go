@@ -7,14 +7,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
+
+	"github.com/bartventer/httpcache"
+	_ "github.com/bartventer/httpcache/store/memcache"
+	gh "github.com/google/go-github/v83/github"
 
 	"github.com/go-telegram/bot"
 	_ "modernc.org/sqlite"
 
 	"github.com/shugen002/RepoCaptchaBot/models"
 	"github.com/shugen002/RepoCaptchaBot/utils"
-	githubapi "github.com/shugen002/RepoCaptchaBot/utils/github"
 	"github.com/shugen002/RepoCaptchaBot/verifier"
 )
 
@@ -50,7 +54,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	ghClient := githubapi.NewGitHubClient(cfg.GithubToken)
+	ghHTTPClient := httpcache.NewClient("memcache://")
+	ghHTTPClient.Timeout = 20 * time.Second
+	ghClient := gh.NewClient(ghHTTPClient)
+	if strings.TrimSpace(cfg.GithubToken) != "" {
+		ghClient = ghClient.WithAuthToken(cfg.GithubToken)
+	}
 	verifier := verifier.NewVerifier(ghClient, store)
 	handler := NewBotHandler(cfg, store, verifier, i18n)
 

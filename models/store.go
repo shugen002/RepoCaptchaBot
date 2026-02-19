@@ -25,17 +25,9 @@ type StoredQuestion struct {
 	ID        int64
 	Repo      string
 	Type      string
-	Prompt    string
-	Payload   string
-	Answer    string
+	Data      string
+	Generator string
 	CreatedAt time.Time
-}
-
-type RepoFileCache struct {
-	Repo       string
-	CommitHash string
-	Files      []string
-	UpdatedAt  time.Time
 }
 
 type ChatConfig struct {
@@ -112,10 +104,12 @@ func (s *Store) Init(ctx context.Context) error {
 }
 
 func (s *Store) InsertQuestion(ctx context.Context, q StoredQuestion) (int64, error) {
+	prompt := payloadStringField(q.Data, "prompt")
+	answer := payloadStringField(q.Data, "answer")
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO questions (repo, type, prompt, payload, answer, created_at) VALUES (?, ?, ?, ?, ?, ?)`+
 			``,
-		q.Repo, q.Type, q.Prompt, q.Payload, q.Answer, q.CreatedAt.Unix(),
+		q.Repo, q.Type, prompt, q.Data, answer, q.CreatedAt.Unix(),
 	)
 	if err != nil {
 		return 0, err
@@ -162,11 +156,58 @@ func (s *Store) GetQuestion(ctx context.Context, questionID int64) (StoredQuesti
 	)
 	var q StoredQuestion
 	var created int64
-	if err := row.Scan(&q.ID, &q.Repo, &q.Type, &q.Prompt, &q.Payload, &q.Answer, &created); err != nil {
+	var prompt string
+	var answer string
+	if err := row.Scan(&q.ID, &q.Repo, &q.Type, &prompt, &q.Data, &answer, &created); err != nil {
 		return StoredQuestion{}, err
 	}
+	q.Data = mergeQuestionPayload(q.Data, prompt, answer)
 	q.CreatedAt = time.Unix(created, 0)
 	return q, nil
+}
+
+func payloadStringField(payload string, field string) string {
+	if strings.TrimSpace(payload) == "" || strings.TrimSpace(field) == "" {
+		return ""
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(payload), &data); err != nil {
+		return ""
+	}
+	value, ok := data[field]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return text
+}
+
+func mergeQuestionPayload(payload, prompt, answer string) string {
+	result := map[string]interface{}{}
+	if strings.TrimSpace(payload) != "" {
+		_ = json.Unmarshal([]byte(payload), &result)
+	}
+	if strings.TrimSpace(prompt) != "" {
+		if _, exists := result["prompt"]; !exists {
+			result["prompt"] = prompt
+		}
+	}
+	if strings.TrimSpace(answer) != "" {
+		if _, exists := result["answer"]; !exists {
+			result["answer"] = answer
+		}
+	}
+	if len(result) == 0 {
+		return "{}"
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return payload
+	}
+	return string(encoded)
 }
 
 func (s *Store) DeletePending(ctx context.Context, telegramID, chatID int64) error {
@@ -253,42 +294,4 @@ func (s *Store) DeleteChatData(ctx context.Context, chatID int64) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-func (s *Store) GetRepoFileCache(ctx context.Context, repo string) (RepoFileCache, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT repo, commit_hash, files, updated_at FROM repo_file_cache WHERE repo = ?`,
-		repo,
-	)
-	var cache RepoFileCache
-	var filesJSON string
-	var updated int64
-	if err := row.Scan(&cache.Repo, &cache.CommitHash, &filesJSON, &updated); err != nil {
-		return RepoFileCache{}, err
-	}
-	if err := json.Unmarshal([]byte(filesJSON), &cache.Files); err != nil {
-		return RepoFileCache{}, err
-	}
-	cache.UpdatedAt = time.Unix(updated, 0)
-	return cache, nil
-}
-
-func (s *Store) UpsertRepoFileCache(ctx context.Context, cache RepoFileCache) error {
-	if strings.TrimSpace(cache.Repo) == "" {
-		return errors.New("repo 不能为空")
-	}
-	if strings.TrimSpace(cache.CommitHash) == "" {
-		return errors.New("commit_hash 不能为空")
-	}
-	filesJSON, err := json.Marshal(cache.Files)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO repo_file_cache (repo, commit_hash, files, updated_at)
-		 VALUES (?, ?, ?, ?)
-		 ON CONFLICT(repo) DO UPDATE SET commit_hash = excluded.commit_hash, files = excluded.files, updated_at = excluded.updated_at`,
-		cache.Repo, cache.CommitHash, string(filesJSON), cache.UpdatedAt.Unix(),
-	)
-	return err
 }

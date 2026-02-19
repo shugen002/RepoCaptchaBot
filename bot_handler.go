@@ -89,12 +89,17 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 		return
 	}
 
+	payload, err := verifier.EncodeQuestionData(q)
+	if err != nil {
+		slog.Error("保存题目失败", "error", err)
+		return
+	}
+
 	qid, err := h.store.InsertQuestion(ctx, appmodels.StoredQuestion{
 		Repo:      chatCfg.Repo,
+		Generator: q.Generator,
 		Type:      q.Type,
-		Prompt:    q.Prompt,
-		Payload:   q.Payload,
-		Answer:    q.Answer,
+		Data:      payload,
 		CreatedAt: time.Now(),
 	})
 	if err != nil {
@@ -113,11 +118,11 @@ func (h *BotHandler) handleJoinRequest(ctx context.Context, b *bot.Bot, req *mod
 		slog.Error("保存待验证用户失败", "error", err)
 		return
 	}
-	slog.Info("触发入群验证", "trigger", "join_request", "chat_id", chatID, "chat_title", req.Chat.Title, "user_id", req.From.ID, "username", req.From.Username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
+	slog.Info("触发入群验证", "trigger", "join_request", "chat_id", chatID, "chat_title", req.Chat.Title, "user_id", req.From.ID, "username", req.From.Username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Question)
 
 	text := utils.FormatMarkdown(userI18n, "verify.prompt", map[string]string{
 		"ttl":      utils.FormatCode(utils.FormatDuration(chatCfg.QuestionTTL)),
-		"question": q.Prompt,
+		"question": q.Question,
 		"repo":     utils.FormatRepoLink(chatCfg.Repo),
 	})
 
@@ -166,12 +171,17 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 		return
 	}
 
+	payload, err := verifier.EncodeQuestionData(q)
+	if err != nil {
+		slog.Error("保存题目失败", "error", err)
+		return
+	}
+
 	qid, err := h.store.InsertQuestion(ctx, appmodels.StoredQuestion{
 		Repo:      chatCfg.Repo,
+		Generator: q.Generator,
 		Type:      q.Type,
-		Prompt:    q.Prompt,
-		Payload:   q.Payload,
-		Answer:    q.Answer,
+		Data:      payload,
 		CreatedAt: time.Now(),
 	})
 	if err != nil {
@@ -190,11 +200,11 @@ func (h *BotHandler) handleChatMemberUpdated(ctx context.Context, b *bot.Bot, up
 		slog.Error("保存待验证用户失败", "error", err)
 		return
 	}
-	slog.Info("触发入群验证", "trigger", "group_join", "chat_id", chatID, "chat_title", upd.Chat.Title, "user_id", userID, "username", username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Prompt)
+	slog.Info("触发入群验证", "trigger", "group_join", "chat_id", chatID, "chat_title", upd.Chat.Title, "user_id", userID, "username", username, "question_id", qid, "question_type", q.Type, "question_prompt", q.Question)
 
 	text := utils.FormatMarkdown(userI18n, "verify.prompt", map[string]string{
 		"ttl":      utils.FormatCode(utils.FormatDuration(chatCfg.QuestionTTL)),
-		"question": q.Prompt,
+		"question": q.Question,
 		"repo":     utils.FormatRepoLink(chatCfg.Repo),
 	})
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
@@ -241,16 +251,17 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 		return
 	}
 
-	question, err := h.store.GetQuestion(ctx, pending.QuestionID)
+	storedQuestion, err := h.store.GetQuestion(ctx, pending.QuestionID)
 	if err != nil {
 		slog.Error("读取题目失败", "error", err, "question_id", pending.QuestionID)
 		return
 	}
+	question := h.verifier.FromStoredQuestion(storedQuestion)
 	chatCfg, cfgErr := h.store.GetChatConfig(ctx, pending.ChatID)
 	if cfgErr == nil {
 		chatCfg = h.applyChatDefaults(chatCfg)
 	} else {
-		chatCfg = h.applyChatDefaults(appmodels.ChatConfig{ChatID: pending.ChatID, Repo: question.Repo})
+		chatCfg = h.applyChatDefaults(appmodels.ChatConfig{ChatID: pending.ChatID, Repo: storedQuestion.Repo})
 	}
 	userI18n := h.i18nForUser(msg.From, chatCfg)
 	expired := time.Now().After(pending.ExpiresAt)
@@ -258,11 +269,11 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 
 	if strings.HasPrefix(msg.Text, "/start") {
 		if expired {
-			slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
+			slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", storedQuestion.ID, "question_type", question.Type, "question_prompt", question.Prompt())
 			_ = h.reject(ctx, b, pending, utils.FormatMarkdown(userI18n, "verify.timeout", nil))
 			return
 		}
-		slog.Info("重新发送验证题目", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
+		slog.Info("重新发送验证题目", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", storedQuestion.ID, "question_type", question.Type, "question_prompt", question.Prompt())
 		remaining := time.Until(pending.ExpiresAt)
 		if remaining < 0 {
 			remaining = 0
@@ -272,15 +283,15 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 	}
 
 	if expired {
-		slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
+		slog.Info("验证超时", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", storedQuestion.ID, "question_type", question.Type, "question_prompt", question.Prompt())
 		_ = h.reject(ctx, b, pending, utils.FormatMarkdown(userI18n, "verify.timeout", nil))
 		return
 	}
 
 	provided := strings.TrimSpace(msg.Text)
 
-	if utils.NormalizeAnswer(msg.Text) == utils.NormalizeAnswer(question.Answer) {
-		slog.Info("验证通过", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt)
+	if h.verifier.VerifyQuestion(question, msg.Text) {
+		slog.Info("验证通过", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", storedQuestion.ID, "question_type", question.Type, "question_prompt", question.Prompt())
 		if err := h.approve(ctx, b, pending); err != nil {
 			slog.Warn("审批失败", "error", err)
 		}
@@ -297,7 +308,7 @@ func (h *BotHandler) handlePrivateMessage(ctx context.Context, b *bot.Bot, msg *
 	}
 	attemptsLeft := pending.AttemptsLeft - 1
 	if attemptsLeft <= 0 {
-		slog.Info("验证失败", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", question.ID, "question_type", question.Type, "question_prompt", question.Prompt, "provided_answer", provided)
+		slog.Info("验证失败", "chat_id", pending.ChatID, "user_id", pending.TelegramID, "username", username, "question_id", storedQuestion.ID, "question_type", question.Type, "question_prompt", question.Prompt(), "provided_answer", provided)
 		_ = h.reject(ctx, b, pending, utils.FormatMarkdown(userI18n, "verify.wrong_answer", nil))
 		return
 	}
@@ -575,16 +586,17 @@ func (h *BotHandler) handleMyChatMember(ctx context.Context, b *bot.Bot, upd *mo
 }
 
 func (h *BotHandler) sendQuestionAgain(ctx context.Context, b *bot.Bot, chatID int64, questionID int64, ttl time.Duration, i18n *utils.I18n) {
-	question, err := h.store.GetQuestion(ctx, questionID)
+	storedQuestion, err := h.store.GetQuestion(ctx, questionID)
 	if err != nil {
 		return
 	}
+	question := h.verifier.FromStoredQuestion(storedQuestion)
 	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text: utils.FormatMarkdown(i18n, "verify.prompt_again", map[string]string{
 			"ttl":      utils.FormatCode(utils.FormatDuration(ttl)),
-			"question": question.Prompt,
-			"repo":     utils.FormatRepoLink(question.Repo),
+			"question": question.Prompt(),
+			"repo":     utils.FormatRepoLink(storedQuestion.Repo),
 		}),
 		ParseMode: "MarkdownV2",
 	})

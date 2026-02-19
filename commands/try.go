@@ -52,6 +52,7 @@ func HandleTry(ctx context.Context, b *bot.Bot, env *Context, msg *models.Messag
 		env.SendReply(ctx, b, replyChatID, utils.FormatMarkdown(i18n, "private.try.unavailable", map[string]string{"type": utils.FormatCode(qType)}))
 		return
 	}
-	text := utils.FormatMarkdown(i18n, "private.try.question", map[string]string{"question": q.Prompt, "answer": utils.FormatCode(q.Answer)})
+	answer := verifier.ExtractAnswer(q)
+	text := utils.FormatMarkdown(i18n, "private.try.question", map[string]string{"question": q.Question, "answer": utils.FormatCode(answer)})
 	env.SendReply(ctx, b, replyChatID, text)
 }

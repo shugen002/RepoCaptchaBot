@@ -2,12 +2,8 @@ package verifier
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
 	"strconv"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/shugen002/RepoCaptchaBot/models"
@@ -29,7 +25,7 @@ func (v *Verifier) questionFileLine(ctx context.Context, cfg models.ChatConfig, 
 
 	var lastErr error
 	for _, path := range files {
-		content, err := v.gh.GetFileContent(ctx, cfg.Repo, path)
+		content, err := getFileContent(ctx, v.gh, cfg.Repo, path)
 		if err != nil {
 			lastErr = err
 			continue
@@ -39,17 +35,16 @@ func (v *Verifier) questionFileLine(ctx context.Context, cfg models.ChatConfig, 
 			continue
 		}
 		picked := candidates[v.rnd.IntN(len(candidates))]
-		payload, _ := json.Marshal(map[string]interface{}{
-			"type":        "file_line",
-			"path":        path,
-			"line":        picked.Line,
-			"commit_hash": commitHash,
-		})
 		return Question{
-			Prompt:  utils.FormatMarkdown(i18n, "question.file_line", map[string]string{"repo": utils.FormatRepoLink(cfg.Repo), "path": utils.FormatCode(path), "line": utils.FormatCode(strconv.Itoa(picked.Line))}),
-			Answer:  strings.TrimSpace(picked.Text),
-			Type:    "file_line",
-			Payload: string(payload),
+			Generator: "file_line",
+			Type:      "file_line",
+			Question:  utils.FormatMarkdown(i18n, "question.file_line", map[string]string{"repo": utils.FormatRepoLink(cfg.Repo), "path": utils.FormatCode(path), "line": utils.FormatCode(strconv.Itoa(picked.Line))}),
+			Data: map[string]interface{}{
+				"answer":      strings.TrimSpace(picked.Text),
+				"path":        path,
+				"line":        picked.Line,
+				"commit_hash": commitHash,
+			},
 		}, true, nil
 	}
 
@@ -91,33 +86,14 @@ func isSymbolOnly(text string) bool {
 }
 
 func (v *Verifier) getRepoFiles(ctx context.Context, repo string) ([]string, string, error) {
-	commitHash, err := v.gh.GetLatestCommitSHA(ctx, repo)
+	commitHash, err := getLatestCommitSHA(ctx, v.gh, repo)
 	if err != nil {
 		return nil, "", err
 	}
 
-	if v.db != nil {
-		cached, err := v.db.GetRepoFileCache(ctx, repo)
-		if err == nil && cached.CommitHash == commitHash && len(cached.Files) > 0 {
-			return cached.Files, commitHash, nil
-		}
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return nil, "", err
-		}
-	}
-
-	files, err := v.gh.GetRepoFileList(ctx, repo, commitHash, 2)
+	files, err := getRepoFileList(ctx, v.gh, repo, commitHash, 2)
 	if err != nil {
 		return nil, "", err
-	}
-
-	if v.db != nil {
-		_ = v.db.UpsertRepoFileCache(ctx, models.RepoFileCache{
-			Repo:       repo,
-			CommitHash: commitHash,
-			Files:      files,
-			UpdatedAt:  time.Now(),
-		})
 	}
 
 	return files, commitHash, nil
